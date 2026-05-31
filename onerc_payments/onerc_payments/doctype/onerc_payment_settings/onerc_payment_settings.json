@@ -18,10 +18,10 @@
   "mpesa_daraja_section",
   "mpesa_consumer_key",
   "mpesa_consumer_secret",
+  "mpesa_callback_base_url",
   "column_break_pzpx",
-  "mpesa_shortcode",
   "mpesa_passkey",
-  "mpesa_callback_base_url"
+  "mpesa_shortcode"
  ],
  "fields": [
   {
@@ -80,7 +80,7 @@
   },
   {
    "fieldname": "mpesa_consumer_key",
-   "fieldtype": "Password",
+   "fieldtype": "Text",
    "label": "MPESA Consumer Key"
   },
   {
@@ -95,7 +95,7 @@
   },
   {
    "fieldname": "mpesa_passkey",
-   "fieldtype": "Password",
+   "fieldtype": "Text",
    "label": "MPESA Passkey"
   },
   {
@@ -116,7 +116,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-05-31 12:17:27.917363",
+ "modified": "2026-05-31 20:24:08.537166",
  "modified_by": "Administrator",
  "module": "Onerc Payments",
  "name": "OneRC Payment Settings",
