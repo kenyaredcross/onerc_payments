@@ -85,7 +85,7 @@
   },
   {
    "fieldname": "mpesa_consumer_secret",
-   "fieldtype": "Password",
+   "fieldtype": "Data",
    "label": "MPESA Consumer Secret"
   },
   {
@@ -116,7 +116,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-05-31 20:24:08.537166",
+ "modified": "2026-05-31 22:43:49.439653",
  "modified_by": "Administrator",
  "module": "Onerc Payments",
  "name": "OneRC Payment Settings",
