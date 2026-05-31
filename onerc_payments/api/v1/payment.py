@@ -113,51 +113,67 @@ def check_payment_status(transaction_id):
 
 
 @frappe.whitelist(allow_guest=True)
-def payment_callback(gateway_name, **kwargs):
-	"""
-	Public endpoint for gateway callbacks/webhooks.
-	URL: /api/method/onerc_payments.api.v1.payment.payment_callback?gateway_name=Mpesa+Daraja
+def payment_callback(gateway_name=None, **kwargs):
+    import json
 
-	Frappe passes the full request body as kwargs.
-	"""
-	data = frappe.request.get_json(force=True) or kwargs
+    try:
+        raw = frappe.request.data
+        data = json.loads(raw) if raw else {}
+    except Exception:
+        data = {}
 
-	gateway_reference = _extract_gateway_reference(gateway_name, data)
-	if not gateway_reference:
-		frappe.logger().warning(f"onerc_payments: callback received but no reference found. Data: {data}")
-		return {"ResultCode": 0, "ResultDesc": "Accepted"}
+    if not data:
+        data = {k: v for k, v in frappe.form_dict.items()
+                if k != "cmd"}
 
-	transaction = frappe.db.get_value(
-		"OneRC Payment Transaction",
-		{"gateway_reference": gateway_reference},
-		"name",
-	)
+    if not gateway_name:
+        gateway_name = data.get("gateway_name", "")
 
-	if not transaction:
-		frappe.logger().warning(f"onerc_payments: no transaction found for reference {gateway_reference}")
-		return {"ResultCode": 0, "ResultDesc": "Accepted"}
+    gateway_reference = _extract_gateway_reference(gateway_name, data)
 
-	transaction_doc = frappe.get_doc("OneRC Payment Transaction", transaction)
-	gateway = get_gateway()
-	result = gateway.handle_callback(data, transaction_doc)
+    if not gateway_reference:
+        frappe.logger().warning(
+            f"onerc_payments: callback received but no reference found. "
+            f"gateway={gateway_name} data={data}"
+        )
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-	transaction_doc.status = result["status"]
-	transaction_doc.raw_response = str(data)
+    transaction_name = frappe.db.get_value(
+        "OneRC Payment Transaction",
+        {"gateway_reference": gateway_reference},
+        "name",
+    )
 
-	if result.get("gateway_receipt"):
-		transaction_doc.gateway_receipt = result["gateway_receipt"]
-		transaction_doc.transaction_date = now_datetime()
+    if not transaction_name:
+        frappe.logger().warning(
+            f"onerc_payments: no transaction found for reference "
+            f"{gateway_reference}"
+        )
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-	if result.get("failure_reason"):
-		transaction_doc.failure_reason = result["failure_reason"]
+    transaction_doc = frappe.get_doc(
+        "OneRC Payment Transaction", transaction_name
+    )
+    gateway = get_gateway()
+    result = gateway.handle_callback(data, transaction_doc)
 
-	transaction_doc.save(ignore_permissions=True)
+    transaction_doc.status = result["status"]
+    transaction_doc.raw_response = str(data)
 
-	if result["status"] == "Completed":
-		_notify_source_app(transaction_doc)
+    if result.get("gateway_receipt"):
+        transaction_doc.gateway_receipt = result["gateway_receipt"]
+        transaction_doc.transaction_date = now_datetime()
 
-	return {"ResultCode": 0, "ResultDesc": "Accepted"}
+    if result.get("failure_reason"):
+        transaction_doc.failure_reason = result["failure_reason"]
 
+    transaction_doc.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    if result["status"] == "Completed":
+        _notify_source_app(transaction_doc)
+
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 def _notify_source_app(transaction):
 	"""
