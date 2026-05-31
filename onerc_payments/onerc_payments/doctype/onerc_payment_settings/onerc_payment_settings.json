@@ -7,8 +7,21 @@
  "field_order": [
   "active_gateway",
   "default_currency",
+  "column_break_rbnz",
   "environment",
-  "post_to_erpnext_gl"
+  "post_to_erpnext_gl",
+  "manual__bank_transfer_section",
+  "manual_bank_name",
+  "manual_account_number",
+  "column_break_yseu",
+  "manual_instructions",
+  "mpesa_daraja_section",
+  "mpesa_consumer_key",
+  "mpesa_consumer_secret",
+  "column_break_pzpx",
+  "mpesa_shortcode",
+  "mpesa_passkey",
+  "mpesa_callback_base_url"
  ],
  "fields": [
   {
@@ -27,20 +40,83 @@
   {
    "fieldname": "environment",
    "fieldtype": "Select",
-   "label": "Environment"
+   "label": "Environment",
+   "options": "\nSandbox\nProduction"
   },
   {
    "default": "0",
    "fieldname": "post_to_erpnext_gl",
    "fieldtype": "Check",
    "label": "Post to ERPNext GL"
+  },
+  {
+   "fieldname": "column_break_rbnz",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "manual__bank_transfer_section",
+   "fieldtype": "Section Break",
+   "label": "Manual / Bank Transfer"
+  },
+  {
+   "fieldname": "manual_bank_name",
+   "fieldtype": "Data",
+   "label": "Bank Name"
+  },
+  {
+   "fieldname": "manual_account_number",
+   "fieldtype": "Data",
+   "label": "Account Number"
+  },
+  {
+   "fieldname": "manual_instructions",
+   "fieldtype": "Text",
+   "label": "Manual Instructions"
+  },
+  {
+   "fieldname": "mpesa_daraja_section",
+   "fieldtype": "Section Break",
+   "label": "MPESA Daraja"
+  },
+  {
+   "fieldname": "mpesa_consumer_key",
+   "fieldtype": "Password",
+   "label": "MPESA Consumer Key"
+  },
+  {
+   "fieldname": "mpesa_consumer_secret",
+   "fieldtype": "Password",
+   "label": "MPESA Consumer Secret"
+  },
+  {
+   "fieldname": "mpesa_shortcode",
+   "fieldtype": "Data",
+   "label": "MPESA Shortcode"
+  },
+  {
+   "fieldname": "mpesa_passkey",
+   "fieldtype": "Password",
+   "label": "MPESA Passkey"
+  },
+  {
+   "fieldname": "mpesa_callback_base_url",
+   "fieldtype": "Data",
+   "label": "MPESA Callback Base URL"
+  },
+  {
+   "fieldname": "column_break_pzpx",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "column_break_yseu",
+   "fieldtype": "Column Break"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-05-31 03:46:01.440599",
+ "modified": "2026-05-31 12:17:27.917363",
  "modified_by": "Administrator",
  "module": "Onerc Payments",
  "name": "OneRC Payment Settings",
