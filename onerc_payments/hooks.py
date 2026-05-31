@@ -260,3 +260,10 @@ scheduler_events = {
 override_whitelisted_methods = {
 	"onerc_payments.api.v1.payment.payment_callback": "onerc_payments.api.v1.payment.payment_callback",
 }
+
+fixtures = [
+    {
+        "dt": "Payment Gateway",
+        "filters": [["gateway_name", "in", ["Mpesa Daraja", "Manual"]]]
+    }
+]

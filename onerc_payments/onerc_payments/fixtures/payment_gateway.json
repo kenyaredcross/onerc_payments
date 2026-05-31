@@ -1,0 +1,24 @@
+[
+  {
+    "doctype": "Payment Gateway",
+    "gateway_name": "Mpesa Daraja",
+    "label": "M-Pesa (Daraja API)",
+    "is_active": 1,
+    "supports_inbound": 1,
+    "supports_outbound": 1,
+    "driver_class": "onerc_payments.gateways.mpesa_daraja.MpesaDarajaGateway",
+    "supported_countries": "Kenya",
+    "description": "Safaricom M-Pesa via Daraja API. Supports STK Push (inbound) and B2C (outbound)."
+  },
+  {
+    "doctype": "Payment Gateway",
+    "gateway_name": "Manual",
+    "label": "Manual (Bank Transfer / Cash)",
+    "is_active": 1,
+    "supports_inbound": 1,
+    "supports_outbound": 1,
+    "driver_class": "onerc_payments.gateways.manual.ManualGateway",
+    "supported_countries": "All",
+    "description": "Admin manually confirms payments. Use for bank transfers, cash, or testing."
+  }
+]
