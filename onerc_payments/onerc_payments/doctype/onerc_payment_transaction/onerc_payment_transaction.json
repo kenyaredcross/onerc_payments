@@ -1,0 +1,246 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:PAY-{YYYY}-{#####}",
+ "creation": "2026-05-31 10:35:32.649223",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "gateway",
+  "direction",
+  "column_break_lyhr",
+  "status",
+  "amount",
+  "currency",
+  "source_section",
+  "source_app",
+  "column_break_mpoj",
+  "source_doctype",
+  "source_document",
+  "payer_recepient_section",
+  "payer_name",
+  "phone_number",
+  "email",
+  "column_break_cyhc",
+  "recipient_name",
+  "recipient_phone",
+  "recipient_account",
+  "section_break_ghzr",
+  "gateway_reference",
+  "gateway_receipt",
+  "transaction_date",
+  "column_break_auzk",
+  "failure_reason",
+  "raw_response",
+  "erpnext_section",
+  "erpnext_payment_entry",
+  "metadata_section",
+  "metadata"
+ ],
+ "fields": [
+  {
+   "fieldname": "gateway",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Gateway",
+   "options": "OneRC Payment Gateway",
+   "reqd": 1
+  },
+  {
+   "fieldname": "direction",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Direction",
+   "options": "\nInbound\nOutbound",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_lyhr",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "\nInitiated\nPending\nCompleted\nFailed\nCancelled\nRefunded",
+   "reqd": 1
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Amount",
+   "reqd": 1
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Data",
+   "label": "Currency",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_section",
+   "fieldtype": "Section Break",
+   "label": "Source"
+  },
+  {
+   "fieldname": "source_app",
+   "fieldtype": "Data",
+   "label": "Source App",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_mpoj",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "source_doctype",
+   "fieldtype": "Data",
+   "label": "Source Doctype",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_document",
+   "fieldtype": "Data",
+   "label": "Source Document",
+   "reqd": 1
+  },
+  {
+   "fieldname": "payer_recepient_section",
+   "fieldtype": "Section Break",
+   "label": "Payer/ Recepient"
+  },
+  {
+   "fieldname": "payer_name",
+   "fieldtype": "Data",
+   "label": "Payer Name"
+  },
+  {
+   "fieldname": "phone_number",
+   "fieldtype": "Data",
+   "label": "Phone Number",
+   "options": "Phone"
+  },
+  {
+   "fieldname": "email",
+   "fieldtype": "Data",
+   "label": "Email",
+   "options": "Email"
+  },
+  {
+   "fieldname": "column_break_cyhc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "recipient_name",
+   "fieldtype": "Data",
+   "label": "Recipient Name"
+  },
+  {
+   "fieldname": "recipient_phone",
+   "fieldtype": "Data",
+   "label": "Recipient Phone",
+   "options": "Phone"
+  },
+  {
+   "fieldname": "recipient_account",
+   "fieldtype": "Data",
+   "label": "Recipient Account"
+  },
+  {
+   "fieldname": "section_break_ghzr",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "gateway_receipt",
+   "fieldtype": "Data",
+   "label": "Gateway Receipt"
+  },
+  {
+   "fieldname": "transaction_date",
+   "fieldtype": "Datetime",
+   "label": "Transaction Date"
+  },
+  {
+   "fieldname": "gateway_reference",
+   "fieldtype": "Data",
+   "label": "Gateway Reference"
+  },
+  {
+   "fieldname": "column_break_auzk",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "failure_reason",
+   "fieldtype": "Small Text",
+   "label": "Failure Reason"
+  },
+  {
+   "fieldname": "raw_response",
+   "fieldtype": "Code",
+   "label": "Raw Response ",
+   "read_only": 1
+  },
+  {
+   "fieldname": "erpnext_section",
+   "fieldtype": "Section Break",
+   "label": "ERPNext"
+  },
+  {
+   "fieldname": "erpnext_payment_entry",
+   "fieldtype": "Data",
+   "label": "ERPNext Payment Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "metadata_section",
+   "fieldtype": "Section Break",
+   "label": "Metadata"
+  },
+  {
+   "fieldname": "metadata",
+   "fieldtype": "Code",
+   "label": "Metadata",
+   "options": "JSON"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-05-31 10:48:30.171678",
+ "modified_by": "Administrator",
+ "module": "Onerc Payments",
+ "name": "OneRC Payment Transaction",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Prequalification Admin",
+   "share": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

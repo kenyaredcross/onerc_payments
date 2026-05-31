@@ -250,3 +250,13 @@ app_license = "mit"
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
+
+scheduler_events = {
+	"hourly": [
+		"onerc_payments.tasks.poll_pending_transactions",
+	],
+}
+
+override_whitelisted_methods = {
+	"onerc_payments.api.v1.payment.payment_callback": "onerc_payments.api.v1.payment.payment_callback",
+}

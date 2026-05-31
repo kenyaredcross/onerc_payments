@@ -1,0 +1,111 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-05-31 03:37:27.169983",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "gateway_name",
+  "label",
+  "column_break_plzr",
+  "is_active",
+  "supports_inbound",
+  "supports_outbound",
+  "details_section",
+  "driver_class",
+  "supported_countries",
+  "configuration_schema_section",
+  "config_schema"
+ ],
+ "fields": [
+  {
+   "fieldname": "gateway_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Gateway Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "label": "Label"
+  },
+  {
+   "fieldname": "column_break_plzr",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "label": "Is Active"
+  },
+  {
+   "default": "0",
+   "fieldname": "supports_inbound",
+   "fieldtype": "Check",
+   "label": "Supports Inbound"
+  },
+  {
+   "default": "0",
+   "fieldname": "supports_outbound",
+   "fieldtype": "Check",
+   "label": "Supports Outbound"
+  },
+  {
+   "fieldname": "details_section",
+   "fieldtype": "Section Break",
+   "label": "Details"
+  },
+  {
+   "fieldname": "driver_class",
+   "fieldtype": "Data",
+   "label": "Driver Class",
+   "read_only": 1
+  },
+  {
+   "fieldname": "supported_countries",
+   "fieldtype": "Small Text",
+   "label": "Supported Countries"
+  },
+  {
+   "fieldname": "configuration_schema_section",
+   "fieldtype": "Section Break",
+   "label": "Configuration Schema"
+  },
+  {
+   "depends_on": "eval:doc.driver_class",
+   "fieldname": "config_schema",
+   "fieldtype": "Code",
+   "label": "Config Schema",
+   "options": "JSON"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-05-31 03:43:34.659689",
+ "modified_by": "Administrator",
+ "module": "Onerc Payments",
+ "name": "OneRC Payment Gateway",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}
