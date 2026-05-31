@@ -13,7 +13,7 @@ def get_gateway():
 	    gateway = get_gateway()
 	    result = gateway.initiate(transaction)
 	"""
-	settings = frappe.get_single("Payment Settings")
+	settings = frappe.get_single("OneRC Payment Settings")
 
 	if not settings.active_gateway:
 		frappe.throw(
@@ -21,7 +21,7 @@ def get_gateway():
 			"Go to Payment Settings and select an active gateway."
 		)
 
-	gateway_doc = frappe.get_doc("Payment Gateway", settings.active_gateway)
+	gateway_doc = frappe.get_doc("OneRC Payment Gateway", settings.active_gateway)
 
 	if not gateway_doc.driver_class:
 		frappe.throw(

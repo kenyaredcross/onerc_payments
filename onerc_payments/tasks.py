@@ -12,7 +12,7 @@ def poll_pending_transactions():
 	Resolves any that have completed or failed.
 	"""
 	pending = frappe.get_all(
-		"Payment Transaction",
+		"OneRC Payment Transaction",
 		filters={"status": "Pending"},
 		fields=["name"],
 	)

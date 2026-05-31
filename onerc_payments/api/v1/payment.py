@@ -40,10 +40,10 @@ def initiate_payment(
 	    "message": "Check your phone and enter your M-Pesa PIN",
 	}
 	"""
-	settings = frappe.get_single("Payment Settings")
+	settings = frappe.get_single("OneRC Payment Settings")
 
 	transaction = frappe.get_doc({
-		"doctype": "Payment Transaction",
+		"doctype": "OneRC Payment Transaction",
 		"gateway": settings.active_gateway,
 		"direction": direction,
 		"status": "Initiated",
@@ -88,7 +88,7 @@ def check_payment_status(transaction_id):
 	Check the current status of a payment.
 	Called by frontend polling loops.
 	"""
-	transaction = frappe.get_doc("Payment Transaction", transaction_id)
+	transaction = frappe.get_doc("OneRC Payment Transaction", transaction_id)
 	gateway = get_gateway()
 	result = gateway.check_status(transaction)
 
@@ -128,7 +128,7 @@ def payment_callback(gateway_name, **kwargs):
 		return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 	transaction = frappe.db.get_value(
-		"Payment Transaction",
+		"OneRC Payment Transaction",
 		{"gateway_reference": gateway_reference},
 		"name",
 	)
@@ -137,7 +137,7 @@ def payment_callback(gateway_name, **kwargs):
 		frappe.logger().warning(f"onerc_payments: no transaction found for reference {gateway_reference}")
 		return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-	transaction_doc = frappe.get_doc("Payment Transaction", transaction)
+	transaction_doc = frappe.get_doc("OneRC Payment Transaction", transaction)
 	gateway = get_gateway()
 	result = gateway.handle_callback(data, transaction_doc)
 

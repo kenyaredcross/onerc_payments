@@ -1,6 +1,7 @@
 [
   {
-    "doctype": "Payment Gateway",
+    "doctype": "OneRC Payment Gateway",
+    "name": "Mpesa Daraja",
     "gateway_name": "Mpesa Daraja",
     "label": "M-Pesa (Daraja API)",
     "is_active": 1,
@@ -11,7 +12,8 @@
     "description": "Safaricom M-Pesa via Daraja API. Supports STK Push (inbound) and B2C (outbound)."
   },
   {
-    "doctype": "Payment Gateway",
+    "doctype": "OneRC Payment Gateway",
+    "name": "Manual",
     "gateway_name": "Manual",
     "label": "Manual (Bank Transfer / Cash)",
     "is_active": 1,

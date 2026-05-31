@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "field:gateway_name",
  "creation": "2026-05-31 03:37:27.169983",
  "doctype": "DocType",
  "engine": "InnoDB",
@@ -14,6 +15,7 @@
   "details_section",
   "driver_class",
   "supported_countries",
+  "description",
   "configuration_schema_section",
   "config_schema"
  ],
@@ -69,6 +71,11 @@
    "label": "Supported Countries"
   },
   {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  },
+  {
    "fieldname": "configuration_schema_section",
    "fieldtype": "Section Break",
    "label": "Configuration Schema"
@@ -84,6 +91,8 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
+ "search_fields": "gateway_name,label",
+ "title_field": "gateway_name",
  "modified": "2026-05-31 03:43:34.659689",
  "modified_by": "Administrator",
  "module": "Onerc Payments",

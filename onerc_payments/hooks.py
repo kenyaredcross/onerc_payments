@@ -263,7 +263,7 @@ override_whitelisted_methods = {
 
 fixtures = [
     {
-        "dt": "Payment Gateway",
+        "dt": "OneRC Payment Gateway",
         "filters": [["gateway_name", "in", ["Mpesa Daraja", "Manual"]]]
     }
 ]

@@ -71,7 +71,7 @@ class ManualGateway(BaseGateway):
 		Admin calls this to manually confirm a payment.
 		Available as a button on the Payment Transaction form.
 		"""
-		transaction = frappe.get_doc("Payment Transaction", transaction_name)
+		transaction = frappe.get_doc("OneRC Payment Transaction", transaction_name)
 		if transaction.status != "Pending":
 			frappe.throw(f"Cannot confirm a transaction with status {transaction.status}.")
 		transaction.status = "Completed"
