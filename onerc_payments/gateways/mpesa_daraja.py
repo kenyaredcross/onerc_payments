@@ -14,6 +14,7 @@ from datetime import datetime
 
 import frappe
 import requests
+from frappe.utils.password import get_decrypted_password
 
 from .base import BaseGateway
 
@@ -29,20 +30,31 @@ class MpesaDarajaGateway(BaseGateway):
 		return SANDBOX_BASE
 
 	def _get_token(self):
-		"""
-		Fetch an OAuth access token from Daraja.
-		Cached in Redis for 55 minutes so we do not call
-		the token endpoint on every payment.
-		"""
 		cache_key = "onerc_payments:daraja_token"
 		cached = frappe.cache().get_value(cache_key)
 		if cached:
 			return cached
 
-		url = f"{self._base_url()}/oauth/v1/generate?grant_type=client_credentials"
-		key = self.settings.mpesa_consumer_key
-		secret = self.settings.mpesa_consumer_secret
+		key = get_decrypted_password(
+			"OneRC Payment Settings",
+			"OneRC Payment Settings",
+			"mpesa_consumer_key",
+			raise_exception=False,
+		)
+		secret = get_decrypted_password(
+			"OneRC Payment Settings",
+			"OneRC Payment Settings",
+			"mpesa_consumer_secret",
+			raise_exception=False,
+		)
 
+		if not key or not secret:
+			frappe.throw(
+				"M-Pesa consumer key or secret is not configured. "
+				"Go to OneRC Payment Settings and enter your credentials."
+			)
+
+		url = f"{self._base_url()}/oauth/v1/generate?grant_type=client_credentials"
 		response = requests.get(
 			url,
 			auth=(key, secret),
@@ -51,18 +63,26 @@ class MpesaDarajaGateway(BaseGateway):
 		response.raise_for_status()
 		token = response.json().get("access_token")
 
-		# Cache for 55 minutes — Daraja tokens last 60
 		frappe.cache().set_value(cache_key, token, expires_in_sec=3300)
 		return token
 
 	def _generate_password(self, timestamp):
-		"""
-		Daraja STK Push password:
-		base64( shortcode + passkey + timestamp )
-		"""
+		passkey = get_decrypted_password(
+			"OneRC Payment Settings",
+			"OneRC Payment Settings",
+			"mpesa_passkey",
+			raise_exception=False,
+		)
+
+		if not passkey:
+			frappe.throw(
+				"M-Pesa passkey is not configured. "
+				"Go to OneRC Payment Settings and enter your passkey."
+			)
+
 		raw = (
 			self.settings.mpesa_shortcode
-			+ self.settings.mpesa_passkey
+			+ passkey
 			+ timestamp
 		)
 		return base64.b64encode(raw.encode()).decode()
@@ -128,10 +148,6 @@ class MpesaDarajaGateway(BaseGateway):
 		}
 
 	def check_status(self, transaction):
-		"""
-		Query Daraja for the status of a pending STK Push.
-		Called by the hourly scheduler for unresolved transactions.
-		"""
 		timestamp = self._timestamp()
 		payload = {
 			"BusinessShortCode": self.settings.mpesa_shortcode,
@@ -161,7 +177,6 @@ class MpesaDarajaGateway(BaseGateway):
 			}
 
 		if result_code in ("1032", "1037"):
-			# 1032 = cancelled by user, 1037 = timeout
 			return {
 				"status": "Failed",
 				"failure_reason": data.get("ResultDesc"),
@@ -170,10 +185,6 @@ class MpesaDarajaGateway(BaseGateway):
 		return {"status": "Pending"}
 
 	def handle_callback(self, data, transaction):
-		"""
-		Process the callback Daraja sends to our endpoint
-		after the vendor enters their PIN.
-		"""
 		try:
 			callback = data["Body"]["stkCallback"]
 		except (KeyError, TypeError):
@@ -185,7 +196,6 @@ class MpesaDarajaGateway(BaseGateway):
 		result_code = callback.get("ResultCode")
 
 		if result_code == 0:
-			# Payment successful — extract receipt from metadata
 			receipt = None
 			items = (
 				callback.get("CallbackMetadata", {}).get("Item", [])
@@ -218,13 +228,14 @@ class MpesaDarajaGateway(BaseGateway):
 	# ── OUTBOUND — B2C ───────────────────────────────────────────────
 
 	def _initiate_b2c(self, transaction):
-		"""
-		Send money from KRCS to a recipient (volunteer, beneficiary).
-		Uses Daraja B2C API.
-		"""
 		payload = {
 			"InitiatorName": self.settings.mpesa_shortcode,
-			"SecurityCredential": self.settings.mpesa_passkey,
+			"SecurityCredential": get_decrypted_password(
+				"OneRC Payment Settings",
+				"OneRC Payment Settings",
+				"mpesa_passkey",
+				raise_exception=False,
+			),
 			"CommandID": "BusinessPayment",
 			"Amount": int(transaction.amount),
 			"PartyA": self.settings.mpesa_shortcode,

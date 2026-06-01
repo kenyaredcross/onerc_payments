@@ -10,18 +10,18 @@
   "column_break_rbnz",
   "environment",
   "post_to_erpnext_gl",
-  "manual__bank_transfer_section",
-  "manual_bank_name",
-  "manual_account_number",
-  "column_break_yseu",
-  "manual_instructions",
   "mpesa_daraja_section",
   "mpesa_consumer_key",
   "mpesa_consumer_secret",
   "mpesa_callback_base_url",
   "column_break_pzpx",
   "mpesa_passkey",
-  "mpesa_shortcode"
+  "mpesa_shortcode",
+  "manual__bank_transfer_section",
+  "manual_bank_name",
+  "manual_account_number",
+  "column_break_yseu",
+  "manual_instructions"
  ],
  "fields": [
   {
@@ -74,18 +74,19 @@
    "label": "Manual Instructions"
   },
   {
+   "depends_on": "eval:doc.active_gateway && doc.active_gateway.includes(\"MPESA\")",
    "fieldname": "mpesa_daraja_section",
    "fieldtype": "Section Break",
    "label": "MPESA Daraja"
   },
   {
    "fieldname": "mpesa_consumer_key",
-   "fieldtype": "Text",
+   "fieldtype": "Password",
    "label": "MPESA Consumer Key"
   },
   {
    "fieldname": "mpesa_consumer_secret",
-   "fieldtype": "Data",
+   "fieldtype": "Password",
    "label": "MPESA Consumer Secret"
   },
   {
@@ -95,7 +96,7 @@
   },
   {
    "fieldname": "mpesa_passkey",
-   "fieldtype": "Text",
+   "fieldtype": "Password",
    "label": "MPESA Passkey"
   },
   {
@@ -116,7 +117,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-05-31 22:43:49.439653",
+ "modified": "2026-06-01 09:52:48.181926",
  "modified_by": "Administrator",
  "module": "Onerc Payments",
  "name": "OneRC Payment Settings",
