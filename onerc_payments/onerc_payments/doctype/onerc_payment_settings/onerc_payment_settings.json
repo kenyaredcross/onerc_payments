@@ -74,7 +74,7 @@
    "label": "Manual Instructions"
   },
   {
-   "depends_on": "eval:doc.active_gateway && doc.active_gateway.includes(\"MPESA\")",
+   "depends_on": "eval:doc.active_gateway",
    "fieldname": "mpesa_daraja_section",
    "fieldtype": "Section Break",
    "label": "MPESA Daraja"
@@ -117,7 +117,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-06-01 09:52:48.181926",
+ "modified": "2026-06-03 19:51:54.978094",
  "modified_by": "Administrator",
  "module": "Onerc Payments",
  "name": "OneRC Payment Settings",
