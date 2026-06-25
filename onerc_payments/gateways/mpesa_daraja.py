@@ -10,6 +10,7 @@ https://developer.safaricom.co.ke/Documentation
 """
 
 import base64
+import ipaddress
 from datetime import datetime
 
 import frappe
@@ -20,6 +21,32 @@ from .base import BaseGateway
 
 SANDBOX_BASE = "https://sandbox.safaricom.co.ke"
 PRODUCTION_BASE = "https://api.safaricom.co.ke"
+
+# Safaricom Daraja publishes a fixed set of source IPs for callbacks.
+# Reference: https://developer.safaricom.co.ke/Documentation
+# Operators can extend this via frappe.conf.mpesa_extra_allowed_ips
+# (comma-separated string or list, supports CIDR) for staging proxies.
+SAFARICOM_PRODUCTION_IPS = frozenset([
+	"196.201.212.69",
+	"196.201.212.74",
+	"196.201.212.127",
+	"196.201.212.129",
+	"196.201.212.136",
+	"196.201.212.138",
+	"196.201.213.44",
+	"196.201.213.114",
+	"196.201.214.200",
+	"196.201.214.206",
+	"196.201.214.207",
+	"196.201.214.208",
+])
+
+
+def client_ip():
+	"""Return the request's originating IP. Frappe populates
+	frappe.local.request_ip per request, resolving X-Forwarded-For when behind
+	a trusted reverse proxy (configured via the host's proxy settings)."""
+	return getattr(frappe.local, "request_ip", None) or ""
 
 
 class MpesaDarajaGateway(BaseGateway):
@@ -97,6 +124,57 @@ class MpesaDarajaGateway(BaseGateway):
 			f".payment_callback?gateway_name=Mpesa+Daraja"
 		)
 
+	@staticmethod
+	def _redacted(payload):
+		"""Return a JSON string of the request payload with secrets removed,
+		safe to persist for audit/debugging."""
+		safe = {
+			k: v for k, v in payload.items()
+			if k not in ("Password", "SecurityCredential")
+		}
+		return frappe.as_json(safe)
+
+	# ── CALLBACK SOURCE VERIFICATION ─────────────────────────────────
+
+	def verify_callback_source(self):
+		"""Only accept callbacks from Safaricom's published IPs in production.
+		In Sandbox, allow any source so the Daraja STK simulator can drive
+		the flow. Operators may widen the allowlist (e.g. for a staging
+		proxy) via frappe.conf.mpesa_extra_allowed_ips."""
+		if self.settings.environment != "Production":
+			return True
+
+		src = (client_ip() or "").strip()
+		if not src:
+			return False
+
+		if src in SAFARICOM_PRODUCTION_IPS:
+			return True
+
+		extra = frappe.conf.get("mpesa_extra_allowed_ips") or []
+		if isinstance(extra, str):
+			extra = [x.strip() for x in extra.split(",") if x.strip()]
+
+		try:
+			src_addr = ipaddress.ip_address(src)
+		except ValueError:
+			return False
+
+		for entry in extra:
+			entry = entry.strip()
+			if not entry:
+				continue
+			try:
+				if "/" in entry:
+					if src_addr in ipaddress.ip_network(entry, strict=False):
+						return True
+				elif src_addr == ipaddress.ip_address(entry):
+					return True
+			except ValueError:
+				continue
+
+		return False
+
 	# ── INBOUND — STK Push ───────────────────────────────────────────
 
 	def initiate(self, transaction):
@@ -110,15 +188,17 @@ class MpesaDarajaGateway(BaseGateway):
 			"Timestamp": timestamp,
 			"TransactionType": "CustomerPayBillOnline",
 			"Amount": int(transaction.amount),
-			"PartyA": transaction.payer_phone,
+			"PartyA": transaction.phone_number,
 			"PartyB": self.settings.mpesa_shortcode,
-			"PhoneNumber": transaction.payer_phone,
+			"PhoneNumber": transaction.phone_number,
 			"CallBackURL": self._callback_url(transaction),
 			"AccountReference": transaction.name,
 			"TransactionDesc": (
 				f"{transaction.source_app} — {transaction.source_document}"
 			),
 		}
+
+		raw_request = self._redacted(payload)
 
 		try:
 			response = requests.post(
@@ -129,12 +209,19 @@ class MpesaDarajaGateway(BaseGateway):
 			)
 			data = response.json()
 		except Exception as e:
-			return {"success": False, "message": str(e)}
+			return {
+				"success": False,
+				"raw_request": raw_request,
+				"message": str(e),
+			}
 
 		if data.get("ResponseCode") == "0":
 			return {
 				"success": True,
 				"gateway_reference": data.get("CheckoutRequestID"),
+				"merchant_request_id": data.get("MerchantRequestID"),
+				"raw_request": raw_request,
+				"raw_response": frappe.as_json(data),
 				"message": (
 					"Check your phone and enter your M-Pesa PIN "
 					"to complete the payment."
@@ -144,6 +231,9 @@ class MpesaDarajaGateway(BaseGateway):
 		return {
 			"success": False,
 			"gateway_reference": data.get("CheckoutRequestID"),
+			"merchant_request_id": data.get("MerchantRequestID"),
+			"raw_request": raw_request,
+			"raw_response": frappe.as_json(data),
 			"message": data.get("CustomerMessage") or data.get("errorMessage"),
 		}
 
@@ -169,20 +259,30 @@ class MpesaDarajaGateway(BaseGateway):
 			return {"status": "Pending"}
 
 		result_code = str(data.get("ResultCode", ""))
+		result_desc = data.get("ResultDesc")
 
 		if result_code == "0":
 			return {
 				"status": "Completed",
 				"gateway_receipt": data.get("MpesaReceiptNumber"),
+				"result_code": result_code,
+				"result_description": result_desc,
 			}
 
+		# 1032 = cancelled by user, 1037 = timeout (PIN not entered).
 		if result_code in ("1032", "1037"):
 			return {
 				"status": "Failed",
-				"failure_reason": data.get("ResultDesc"),
+				"failure_reason": result_desc,
+				"result_code": result_code,
+				"result_description": result_desc,
 			}
 
-		return {"status": "Pending"}
+		return {
+			"status": "Pending",
+			"result_code": result_code or None,
+			"result_description": result_desc,
+		}
 
 	def handle_callback(self, data, transaction):
 		try:
@@ -194,33 +294,58 @@ class MpesaDarajaGateway(BaseGateway):
 			}
 
 		result_code = callback.get("ResultCode")
+		result_desc = callback.get("ResultDesc")
 
 		if result_code == 0:
-			receipt = None
-			items = (
-				callback.get("CallbackMetadata", {}).get("Item", [])
-			)
-			for item in items:
-				if item.get("Name") == "MpesaReceiptNumber":
-					receipt = item.get("Value")
-					break
+			meta = {
+				item.get("Name"): item.get("Value")
+				for item in callback.get("CallbackMetadata", {}).get("Item", [])
+			}
+			receipt = meta.get("MpesaReceiptNumber")
+
+			# Cross-check the amount the customer actually paid against what we
+			# requested. A mismatch shouldn't silently pass — flag it loudly.
+			paid = meta.get("Amount")
+			if paid is not None and float(paid) != float(transaction.amount):
+				frappe.logger().warning(
+					f"onerc_payments: M-Pesa amount mismatch on {transaction.name} "
+					f"— requested {transaction.amount}, paid {paid}"
+				)
 
 			return {
 				"status": "Completed",
 				"gateway_receipt": receipt,
+				"result_code": str(result_code),
+				"result_description": result_desc,
+				"transaction_date": self._parse_mpesa_date(
+					meta.get("TransactionDate")
+				),
 			}
 
 		return {
 			"status": "Failed",
-			"failure_reason": callback.get("ResultDesc"),
+			"failure_reason": result_desc,
+			"result_code": str(result_code),
+			"result_description": result_desc,
 		}
+
+	@staticmethod
+	def _parse_mpesa_date(value):
+		"""M-Pesa reports TransactionDate as an int like 20191219102115
+		(YYYYMMDDHHMMSS). Convert to a datetime string, or None on failure."""
+		if not value:
+			return None
+		try:
+			return datetime.strptime(str(value), "%Y%m%d%H%M%S")
+		except (ValueError, TypeError):
+			return None
 
 	def generate_receipt(self, transaction):
 		return (
 			f"M-PESA PAYMENT RECEIPT\n"
 			f"Receipt No:  {transaction.gateway_receipt}\n"
 			f"Amount:      {transaction.currency} {transaction.amount}\n"
-			f"Phone:       {transaction.payer_phone}\n"
+			f"Phone:       {transaction.phone_number}\n"
 			f"Date:        {transaction.transaction_date}\n"
 			f"Reference:   {transaction.name}\n"
 		)
@@ -248,6 +373,8 @@ class MpesaDarajaGateway(BaseGateway):
 			"Occasion": transaction.name,
 		}
 
+		raw_request = self._redacted(payload)
+
 		try:
 			response = requests.post(
 				f"{self._base_url()}/mpesa/b2c/v1/paymentrequest",
@@ -257,16 +384,25 @@ class MpesaDarajaGateway(BaseGateway):
 			)
 			data = response.json()
 		except Exception as e:
-			return {"success": False, "message": str(e)}
+			return {
+				"success": False,
+				"raw_request": raw_request,
+				"message": str(e),
+			}
 
 		if data.get("ResponseCode") == "0":
 			return {
 				"success": True,
 				"gateway_reference": data.get("ConversationID"),
+				"merchant_request_id": data.get("OriginatorConversationID"),
+				"raw_request": raw_request,
+				"raw_response": frappe.as_json(data),
 				"message": "Payment initiated to recipient.",
 			}
 
 		return {
 			"success": False,
+			"raw_request": raw_request,
+			"raw_response": frappe.as_json(data),
 			"message": data.get("ResponseDescription"),
 		}

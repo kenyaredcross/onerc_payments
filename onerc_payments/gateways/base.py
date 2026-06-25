@@ -25,6 +25,19 @@ class BaseGateway(ABC):
 		"""
 		self.settings = settings
 
+	def verify_callback_source(self):
+		"""
+		Return True if the current inbound request is from a trusted source.
+
+		Called by the callback endpoint BEFORE any processing. Drivers that
+		can authenticate callbacks (e.g. by source-IP allowlist) should
+		override this and return False for untrusted callers.
+
+		Default: trust (no verification). Overriding is optional so existing
+		drivers keep working unchanged.
+		"""
+		return True
+
 	@abstractmethod
 	def initiate(self, transaction):
 		"""
@@ -36,8 +49,11 @@ class BaseGateway(ABC):
 		Must return a dict:
 		{
 		    "success": True/False,
-		    "gateway_reference": "...",   # e.g. CheckoutRequestID
-		    "message": "...",             # shown to the user
+		    "gateway_reference": "...",     # e.g. CheckoutRequestID
+		    "merchant_request_id": "...",   # optional, e.g. MerchantRequestID
+		    "raw_request": "...",           # optional, JSON of the sent payload
+		    "raw_response": "...",          # optional, JSON of the gateway reply
+		    "message": "...",               # shown to the user
 		}
 		"""
 
@@ -70,6 +86,9 @@ class BaseGateway(ABC):
 		    "status": "Completed" / "Failed",
 		    "gateway_receipt": "...",
 		    "failure_reason": "...",
+		    "result_code": "...",          # optional, raw gateway result code
+		    "result_description": "...",   # optional, human-readable result
+		    "transaction_date": "...",     # optional, gateway-reported datetime
 		}
 		"""
 
