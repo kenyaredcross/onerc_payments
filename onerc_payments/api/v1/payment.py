@@ -243,6 +243,17 @@ def payment_callback(gateway_name=None, **kwargs):
 	if result.get("failure_reason"):
 		transaction_doc.failure_reason = result["failure_reason"]
 
+	# Capture the full gateway payload (e.g. the M-Pesa receipt + metadata) into a
+	# dedicated detail record and link it here. Best-effort: a failure to record the
+	# detail must never block confirming the payment itself.
+	try:
+		gateway.record_payment_details(data, transaction_doc)
+	except Exception as e:
+		frappe.logger().error(
+			f"onerc_payments: failed to record gateway payment details for "
+			f"{transaction_doc.name}: {e}"
+		)
+
 	transaction_doc.save(ignore_permissions=True)
 	frappe.db.commit()
 

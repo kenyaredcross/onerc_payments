@@ -29,6 +29,7 @@
   "gateway_reference",
   "merchant_request_id",
   "gateway_receipt",
+  "mpesa_payment",
   "transaction_date",
   "column_break_auzk",
   "result_code",
@@ -161,6 +162,13 @@
    "fieldname": "gateway_receipt",
    "fieldtype": "Data",
    "label": "Gateway Receipt"
+  },
+  {
+   "fieldname": "mpesa_payment",
+   "fieldtype": "Link",
+   "label": "M-Pesa Payment",
+   "options": "Mpesa Payment",
+   "read_only": 1
   },
   {
    "fieldname": "transaction_date",

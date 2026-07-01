@@ -1,0 +1,179 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:checkout_request_id",
+ "creation": "2026-07-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "payment_transaction",
+  "status",
+  "mpesa_receipt_number",
+  "merchant_request_id",
+  "checkout_request_id",
+  "column_break_ids",
+  "amount",
+  "expected_amount",
+  "amount_matched",
+  "phone_number",
+  "transaction_date",
+  "balance",
+  "result_section",
+  "result_code",
+  "result_description",
+  "audit_section",
+  "callback_ip",
+  "raw_callback"
+ ],
+ "fields": [
+  {
+   "fieldname": "payment_transaction",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Payment Transaction",
+   "options": "OneRC Payment Transaction",
+   "read_only": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "\nCompleted\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "mpesa_receipt_number",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "M-Pesa Receipt Number",
+   "read_only": 1
+  },
+  {
+   "fieldname": "merchant_request_id",
+   "fieldtype": "Data",
+   "label": "Merchant Request ID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "checkout_request_id",
+   "fieldtype": "Data",
+   "label": "Checkout Request ID",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "column_break_ids",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Amount Paid",
+   "read_only": 1
+  },
+  {
+   "fieldname": "expected_amount",
+   "fieldtype": "Currency",
+   "label": "Expected Amount",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "description": "0 when the paid amount does not equal the requested amount — review for fraud/misconfiguration.",
+   "fieldname": "amount_matched",
+   "fieldtype": "Check",
+   "label": "Amount Matches Expected",
+   "read_only": 1
+  },
+  {
+   "fieldname": "phone_number",
+   "fieldtype": "Data",
+   "label": "Phone Number",
+   "options": "Phone",
+   "read_only": 1
+  },
+  {
+   "fieldname": "transaction_date",
+   "fieldtype": "Datetime",
+   "label": "Transaction Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "balance",
+   "fieldtype": "Data",
+   "label": "Balance",
+   "read_only": 1
+  },
+  {
+   "fieldname": "result_section",
+   "fieldtype": "Section Break",
+   "label": "Gateway Result"
+  },
+  {
+   "fieldname": "result_code",
+   "fieldtype": "Data",
+   "label": "Result Code",
+   "read_only": 1
+  },
+  {
+   "fieldname": "result_description",
+   "fieldtype": "Small Text",
+   "label": "Result Description",
+   "read_only": 1
+  },
+  {
+   "fieldname": "audit_section",
+   "fieldtype": "Section Break",
+   "label": "Audit"
+  },
+  {
+   "fieldname": "callback_ip",
+   "fieldtype": "Data",
+   "label": "Callback Source IP",
+   "read_only": 1
+  },
+  {
+   "fieldname": "raw_callback",
+   "fieldtype": "Code",
+   "label": "Raw Callback",
+   "options": "JSON",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-07-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Onerc Payments",
+ "name": "Mpesa Payment",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Prequalification Admin",
+   "share": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
