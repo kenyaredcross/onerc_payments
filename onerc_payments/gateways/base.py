@@ -38,6 +38,20 @@ class BaseGateway(ABC):
 		"""
 		return True
 
+	def record_payment_details(self, data, transaction):
+		"""Persist a gateway-specific detail record from a verified callback and
+		return its docname (or None).
+
+		Called by the callback endpoint AFTER verify_callback_source() has passed
+		and the callback has been matched to an initiated transaction, so the driver
+		may trust `data` exactly as much as the transaction it already matched. Use
+		it to capture the full gateway payload (e.g. the M-Pesa receipt + metadata)
+		into a dedicated doctype and link it to `transaction`.
+
+		Default: no detail record, so existing drivers are unaffected.
+		"""
+		return None
+
 	@abstractmethod
 	def initiate(self, transaction):
 		"""

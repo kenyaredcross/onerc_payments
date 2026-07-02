@@ -329,6 +329,73 @@ class MpesaDarajaGateway(BaseGateway):
 			"result_description": result_desc,
 		}
 
+	def record_payment_details(self, data, transaction):
+		"""Capture the full STK callback into an ``Mpesa Payment`` record and link it
+		to the transaction.
+
+		Idempotent by CheckoutRequestID (one detail record per STK request), so a
+		Safaricom retry updates the existing record rather than duplicating it. Runs
+		only after the callback source + reference have been verified upstream; it
+		does not widen trust. The record is a desk-only audit doctype (no web
+		exposure) and all fields are read-only, so it can't be tampered with via the
+		form. Amount is cross-checked against the requested amount and flagged.
+		"""
+		try:
+			callback = data["Body"]["stkCallback"]
+		except (KeyError, TypeError):
+			return None
+
+		checkout_id = callback.get("CheckoutRequestID")
+		if not checkout_id:
+			return None
+
+		result_code = callback.get("ResultCode")
+		meta = {
+			item.get("Name"): item.get("Value")
+			for item in (callback.get("CallbackMetadata", {}) or {}).get("Item", [])
+		}
+
+		paid = meta.get("Amount")
+		expected = float(transaction.amount or 0)
+		amount_matched = 1
+		if paid is not None:
+			try:
+				amount_matched = 1 if float(paid) == expected else 0
+			except (TypeError, ValueError):
+				amount_matched = 0
+
+		phone = meta.get("PhoneNumber")
+		balance = meta.get("Balance")
+		values = {
+			"payment_transaction": transaction.name,
+			"merchant_request_id": callback.get("MerchantRequestID"),
+			"checkout_request_id": checkout_id,
+			"status": "Completed" if result_code == 0 else "Failed",
+			"result_code": str(result_code) if result_code is not None else None,
+			"result_description": callback.get("ResultDesc"),
+			"mpesa_receipt_number": meta.get("MpesaReceiptNumber"),
+			"amount": paid,
+			"expected_amount": expected,
+			"amount_matched": amount_matched,
+			"phone_number": str(phone) if phone is not None else None,
+			"balance": str(balance) if balance is not None else None,
+			"transaction_date": self._parse_mpesa_date(meta.get("TransactionDate")),
+			"callback_ip": client_ip(),
+			"raw_callback": frappe.as_json(data),
+		}
+
+		existing = frappe.db.get_value("Mpesa Payment", {"checkout_request_id": checkout_id}, "name")
+		if existing:
+			doc = frappe.get_doc("Mpesa Payment", existing)
+			doc.update(values)
+			doc.save(ignore_permissions=True)
+		else:
+			doc = frappe.get_doc({"doctype": "Mpesa Payment", **values})
+			doc.insert(ignore_permissions=True)
+
+		transaction.mpesa_payment = doc.name
+		return doc.name
+
 	@staticmethod
 	def _parse_mpesa_date(value):
 		"""M-Pesa reports TransactionDate as an int like 20191219102115
