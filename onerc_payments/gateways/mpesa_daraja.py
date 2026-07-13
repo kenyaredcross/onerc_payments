@@ -384,6 +384,46 @@ class MpesaDarajaGateway(BaseGateway):
 			"raw_callback": frappe.as_json(data),
 		}
 
+		doc = self._upsert_mpesa_payment(checkout_id, values)
+		transaction.gateway_detail_doctype = "Mpesa Payment"
+		transaction.gateway_detail = doc.name
+		return doc.name
+
+	def record_initiation_details(self, transaction, result):
+		"""Open the ``Mpesa Payment`` detail record at STK initiation.
+
+		Stores the CheckoutRequestID/MerchantRequestID and the raw STK request/
+		response so those gateway-specific fields live on the detail doctype, not the
+		generic transaction. The callback later updates the same record (keyed by
+		CheckoutRequestID) with the receipt and metadata.
+		"""
+		checkout_id = result.get("gateway_reference") or transaction.gateway_reference
+		if not checkout_id:
+			return None
+
+		values = {
+			"payment_transaction": transaction.name,
+			"checkout_request_id": checkout_id,
+			"merchant_request_id": result.get("merchant_request_id"),
+			"status": "Initiated",
+			"expected_amount": float(transaction.amount or 0),
+			"raw_request": result.get("raw_request"),
+			"raw_response": result.get("raw_response"),
+		}
+		doc = self._upsert_mpesa_payment(checkout_id, values)
+		transaction.gateway_detail_doctype = "Mpesa Payment"
+		transaction.gateway_detail = doc.name
+		return doc.name
+
+	@staticmethod
+	def _upsert_mpesa_payment(checkout_id, values):
+		"""Insert or update the Mpesa Payment keyed by CheckoutRequestID.
+
+		None values are dropped so a later stage never blanks a field an earlier
+		stage set (e.g. the callback must not wipe the initiation's raw_request).
+		"""
+		values = {k: v for k, v in values.items() if v is not None}
+		values["checkout_request_id"] = checkout_id
 		existing = frappe.db.get_value("Mpesa Payment", {"checkout_request_id": checkout_id}, "name")
 		if existing:
 			doc = frappe.get_doc("Mpesa Payment", existing)
@@ -392,9 +432,7 @@ class MpesaDarajaGateway(BaseGateway):
 		else:
 			doc = frappe.get_doc({"doctype": "Mpesa Payment", **values})
 			doc.insert(ignore_permissions=True)
-
-		transaction.mpesa_payment = doc.name
-		return doc.name
+		return doc
 
 	@staticmethod
 	def _parse_mpesa_date(value):

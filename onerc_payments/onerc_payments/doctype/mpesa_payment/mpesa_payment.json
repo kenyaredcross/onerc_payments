@@ -23,6 +23,8 @@
   "result_description",
   "audit_section",
   "callback_ip",
+  "raw_request",
+  "raw_response",
   "raw_callback"
  ],
  "fields": [
@@ -39,7 +41,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "\nCompleted\nFailed",
+   "options": "\nInitiated\nPending\nCompleted\nFailed",
    "read_only": 1
   },
   {
@@ -133,6 +135,22 @@
    "fieldname": "callback_ip",
    "fieldtype": "Data",
    "label": "Callback Source IP",
+   "read_only": 1
+  },
+  {
+   "description": "Outbound STK push request payload sent to Daraja (secrets redacted).",
+   "fieldname": "raw_request",
+   "fieldtype": "Code",
+   "label": "Raw Request",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "description": "Synchronous STK push response from Daraja at initiation.",
+   "fieldname": "raw_response",
+   "fieldtype": "Code",
+   "label": "Raw Response",
+   "options": "JSON",
    "read_only": 1
   },
   {

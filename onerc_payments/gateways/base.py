@@ -52,6 +52,20 @@ class BaseGateway(ABC):
 		"""
 		return None
 
+	def record_initiation_details(self, transaction, result):
+		"""Persist gateway-specific initiation data into the per-gateway detail
+		record and link it back, returning its docname (or None).
+
+		Called by initiate_payment() after the gateway responds, so raw request/
+		response payloads and any gateway ids from initiation live on the detail
+		doctype instead of the generic transaction. Set
+		``transaction.gateway_detail_doctype`` / ``transaction.gateway_detail`` here;
+		the caller saves the transaction afterwards.
+
+		Default: no detail record, so existing drivers are unaffected.
+		"""
+		return None
+
 	@abstractmethod
 	def initiate(self, transaction):
 		"""
