@@ -19,6 +19,8 @@ Flow:
 """
 
 import frappe
+from frappe.utils import now_datetime
+
 from .base import BaseGateway
 
 
@@ -99,9 +101,42 @@ def confirm_payment(transaction_name, receipt_number):
 
 	transaction.status = "Completed"
 	transaction.gateway_receipt = receipt_number
+
+	# Record the confirmation on the per-gateway detail doctype and link it back.
+	# Best-effort: a detail failure must not block confirming the payment.
+	try:
+		detail = _record_manual_detail(transaction, receipt_number)
+		transaction.gateway_detail_doctype = "Manual Payment"
+		transaction.gateway_detail = detail.name
+	except Exception as e:
+		frappe.logger().error(
+			f"onerc_payments: failed to record manual payment detail for {transaction.name}: {e}"
+		)
+
 	transaction.save(ignore_permissions=True)
 
 	from onerc_payments.api.v1.payment import _notify_source_app
 	_notify_source_app(transaction)
 
 	return {"success": True, "message": f"Payment {transaction_name} confirmed."}
+
+
+def _record_manual_detail(transaction, receipt_number):
+	"""Upsert the Manual Payment detail record for a manually confirmed transaction."""
+	values = {
+		"payment_transaction": transaction.name,
+		"status": "Completed",
+		"receipt_number": receipt_number,
+		"amount": transaction.amount,
+		"confirmed_by": frappe.session.user,
+		"confirmed_on": now_datetime(),
+	}
+	existing = frappe.db.get_value("Manual Payment", {"payment_transaction": transaction.name}, "name")
+	if existing:
+		doc = frappe.get_doc("Manual Payment", existing)
+		doc.update(values)
+		doc.save(ignore_permissions=True)
+	else:
+		doc = frappe.get_doc({"doctype": "Manual Payment", **values})
+		doc.insert(ignore_permissions=True)
+	return doc

@@ -99,12 +99,15 @@ def initiate_payment(
 		transaction.status = "Failed"
 		transaction.failure_reason = result.get("message")
 
-	if result.get("merchant_request_id"):
-		transaction.merchant_request_id = result.get("merchant_request_id")
-	if result.get("raw_request"):
-		transaction.raw_request = result.get("raw_request")
-	if result.get("raw_response"):
-		transaction.raw_response = result.get("raw_response")
+	# Gateway-specific initiation data (merchant ids, raw request/response) lives on
+	# the per-gateway detail doctype, not the generic transaction. Best-effort: a
+	# detail-record failure must never break initiating the payment.
+	try:
+		gateway.record_initiation_details(transaction, result)
+	except Exception as e:
+		frappe.logger().error(
+			f"onerc_payments: failed to record initiation details for {transaction.name}: {e}"
+		)
 
 	transaction.save(ignore_permissions=True)
 
@@ -127,11 +130,6 @@ def check_payment_status(transaction_id):
 	transaction = frappe.get_doc("OneRC Payment Transaction", transaction_id)
 	gateway = get_gateway()
 	result = gateway.check_status(transaction)
-
-	if result.get("result_code") is not None:
-		transaction.result_code = str(result.get("result_code"))
-	if result.get("result_description"):
-		transaction.result_description = result.get("result_description")
 
 	if result["status"] != transaction.status:
 		transaction.status = result["status"]
@@ -225,14 +223,9 @@ def payment_callback(gateway_name=None, **kwargs):
 	)
 	result = gateway.handle_callback(data, transaction_doc)
 
+	# Neutral fields stay on the transaction; the raw gateway payload, result codes
+	# and callback IP are captured on the per-gateway detail record below.
 	transaction_doc.status = result["status"]
-	transaction_doc.raw_response = frappe.as_json(data)
-	transaction_doc.callback_ip = _client_ip()
-
-	if result.get("result_code") is not None:
-		transaction_doc.result_code = str(result.get("result_code"))
-	if result.get("result_description"):
-		transaction_doc.result_description = result.get("result_description")
 
 	if result.get("gateway_receipt"):
 		transaction_doc.gateway_receipt = result["gateway_receipt"]

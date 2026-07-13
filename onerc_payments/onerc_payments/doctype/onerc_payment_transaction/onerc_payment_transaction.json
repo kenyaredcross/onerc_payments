@@ -27,17 +27,12 @@
   "recipient_account",
   "section_break_ghzr",
   "gateway_reference",
-  "merchant_request_id",
   "gateway_receipt",
-  "mpesa_payment",
   "transaction_date",
   "column_break_auzk",
-  "result_code",
-  "result_description",
+  "gateway_detail_doctype",
+  "gateway_detail",
   "failure_reason",
-  "callback_ip",
-  "raw_request",
-  "raw_response",
   "erpnext_section",
   "erpnext_payment_entry",
   "metadata_section",
@@ -159,16 +154,10 @@
    "fieldtype": "Section Break"
   },
   {
+   "description": "Gateway confirmation / receipt code, e.g. the M-Pesa receipt number.",
    "fieldname": "gateway_receipt",
    "fieldtype": "Data",
    "label": "Gateway Receipt"
-  },
-  {
-   "fieldname": "mpesa_payment",
-   "fieldtype": "Link",
-   "label": "M-Pesa Payment",
-   "options": "Mpesa Payment",
-   "read_only": 1
   },
   {
    "fieldname": "transaction_date",
@@ -176,58 +165,35 @@
    "label": "Transaction Date"
   },
   {
-   "description": "Gateway request reference, e.g. M-Pesa CheckoutRequestID (STK) or ConversationID (B2C)",
+   "description": "Gateway request reference, e.g. M-Pesa CheckoutRequestID (STK) or ConversationID (B2C). The callback matches back to this transaction by it.",
    "fieldname": "gateway_reference",
    "fieldtype": "Data",
    "label": "Gateway Reference"
-  },
-  {
-   "description": "M-Pesa MerchantRequestID (STK) / OriginatorConversationID (B2C)",
-   "fieldname": "merchant_request_id",
-   "fieldtype": "Data",
-   "label": "Merchant Request ID"
   },
   {
    "fieldname": "column_break_auzk",
    "fieldtype": "Column Break"
   },
   {
-   "description": "Gateway result code, e.g. M-Pesa ResultCode (0 = success, 1032 = cancelled, 1037 = timeout)",
-   "fieldname": "result_code",
-   "fieldtype": "Data",
-   "label": "Result Code"
+   "description": "The per-gateway detail doctype holding this transaction's raw gateway fields (e.g. Mpesa Payment, Manual Payment).",
+   "fieldname": "gateway_detail_doctype",
+   "fieldtype": "Link",
+   "label": "Gateway Detail Type",
+   "options": "DocType",
+   "read_only": 1
   },
   {
-   "fieldname": "result_description",
-   "fieldtype": "Small Text",
-   "label": "Result Description"
+   "description": "The per-gateway detail record (all gateway-specific fields live there).",
+   "fieldname": "gateway_detail",
+   "fieldtype": "Dynamic Link",
+   "label": "Gateway Detail",
+   "options": "gateway_detail_doctype",
+   "read_only": 1
   },
   {
    "fieldname": "failure_reason",
    "fieldtype": "Small Text",
    "label": "Failure Reason"
-  },
-  {
-   "description": "Source IP of the most recent callback (audit trail)",
-   "fieldname": "callback_ip",
-   "fieldtype": "Data",
-   "label": "Callback Source IP",
-   "read_only": 1
-  },
-  {
-   "description": "Outbound request payload sent to the gateway (secrets redacted)",
-   "fieldname": "raw_request",
-   "fieldtype": "Code",
-   "label": "Raw Request",
-   "options": "JSON",
-   "read_only": 1
-  },
-  {
-   "fieldname": "raw_response",
-   "fieldtype": "Code",
-   "label": "Raw Response",
-   "options": "JSON",
-   "read_only": 1
   },
   {
    "fieldname": "erpnext_section",
