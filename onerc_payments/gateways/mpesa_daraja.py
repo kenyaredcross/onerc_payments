@@ -136,30 +136,42 @@ class MpesaDarajaGateway(BaseGateway):
 
 	# ── CALLBACK SOURCE VERIFICATION ─────────────────────────────────
 
-	def verify_callback_source(self):
-		"""Only accept callbacks from Safaricom's published IPs in production.
-		In Sandbox, allow any source so the Daraja STK simulator can drive
-		the flow. Operators may widen the allowlist (e.g. for a staging
-		proxy) via frappe.conf.mpesa_extra_allowed_ips."""
-		if self.settings.environment != "Production":
-			return True
+	def _candidate_source_ips(self):
+		"""Every plausible source IP for the current callback, most-trusted first.
 
-		src = (client_ip() or "").strip()
-		if not src:
-			return False
+		In production a callback usually passes through one or more reverse proxies
+		(nginx, a load balancer, a CDN), so Safaricom's real IP may sit in
+		request_ip, anywhere along the X-Forwarded-For chain, or in a CDN header
+		rather than in the socket peer address. We gather every candidate and accept
+		the callback if any one of them is a known Safaricom IP - a genuine callback
+		only needs its real IP to appear somewhere in the forwarded chain.
+		"""
+		candidates = []
 
+		def add(value):
+			value = (value or "").strip()
+			if value and value not in candidates:
+				candidates.append(value)
+
+		add(client_ip())
+		xff = frappe.get_request_header("X-Forwarded-For") or ""
+		for part in xff.split(","):
+			add(part)
+		for header in ("CF-Connecting-IP", "True-Client-IP", "X-Real-IP"):
+			add(frappe.get_request_header(header))
+
+		return candidates
+
+	@staticmethod
+	def _ip_in_allowlist(src, extra):
+		"""True if one source IP is a Safaricom IP or matches an operator allowlist
+		entry (a plain IP or a CIDR block)."""
 		if src in SAFARICOM_PRODUCTION_IPS:
 			return True
-
-		extra = frappe.conf.get("mpesa_extra_allowed_ips") or []
-		if isinstance(extra, str):
-			extra = [x.strip() for x in extra.split(",") if x.strip()]
-
 		try:
 			src_addr = ipaddress.ip_address(src)
 		except ValueError:
 			return False
-
 		for entry in extra:
 			entry = entry.strip()
 			if not entry:
@@ -172,8 +184,40 @@ class MpesaDarajaGateway(BaseGateway):
 					return True
 			except ValueError:
 				continue
-
 		return False
+
+	def verify_callback_source(self):
+		"""Only accept callbacks from Safaricom's published IPs in production.
+
+		In Sandbox, allow any source so the Daraja STK simulator can drive the flow.
+		In production we check *every* candidate source IP (request_ip, the full
+		X-Forwarded-For chain, and common CDN headers) so a genuine callback isn't
+		rejected just because a proxy hop rewrote the peer address - the previous
+		single-IP check was the most likely reason receipts weren't landing behind a
+		reverse proxy. Operators can widen the allowlist via
+		frappe.conf.mpesa_extra_allowed_ips (comma-separated, CIDR supported), or -
+		for proxy topologies where the origin IP genuinely can't be recovered - set
+		frappe.conf.mpesa_verify_callback_ip = 0 to fall back to the unguessable
+		per-transaction CheckoutRequestID match (which is the real security gate).
+		"""
+		if self.settings.environment != "Production":
+			return True
+
+		if not frappe.conf.get("mpesa_verify_callback_ip", True):
+			frappe.logger().warning(
+				"onerc_payments: M-Pesa callback IP verification is disabled "
+				"(mpesa_verify_callback_ip=0); relying on the CheckoutRequestID match."
+			)
+			return True
+
+		extra = frappe.conf.get("mpesa_extra_allowed_ips") or []
+		if isinstance(extra, str):
+			extra = [x.strip() for x in extra.split(",") if x.strip()]
+
+		return any(
+			self._ip_in_allowlist(src, extra)
+			for src in self._candidate_source_ips()
+		)
 
 	# ── INBOUND — STK Push ───────────────────────────────────────────
 
@@ -389,6 +433,31 @@ class MpesaDarajaGateway(BaseGateway):
 		transaction.gateway_detail = doc.name
 		return doc.name
 
+	def record_status_update(self, transaction, result):
+		"""Update the linked ``Mpesa Payment`` record from an STK status query.
+
+		The STK *query* API does not return the M-Pesa receipt number - only the
+		callback carries that - so this mainly moves the detail record off
+		"Initiated"/"Pending" onto its resolved status. If a receipt is somehow
+		present it is stored too. Keyed by CheckoutRequestID, so it updates the
+		existing detail record rather than creating a duplicate.
+		"""
+		checkout_id = transaction.gateway_reference
+		if not checkout_id:
+			return None
+
+		values = {
+			"payment_transaction": transaction.name,
+			"checkout_request_id": checkout_id,
+			"status": result.get("status"),
+			"result_code": result.get("result_code"),
+			"result_description": (
+				result.get("result_description") or result.get("failure_reason")
+			),
+			"mpesa_receipt_number": result.get("gateway_receipt"),
+		}
+		return self._upsert_mpesa_payment(checkout_id, values).name
+
 	def record_initiation_details(self, transaction, result):
 		"""Open the ``Mpesa Payment`` detail record at STK initiation.
 
@@ -405,7 +474,10 @@ class MpesaDarajaGateway(BaseGateway):
 			"payment_transaction": transaction.name,
 			"checkout_request_id": checkout_id,
 			"merchant_request_id": result.get("merchant_request_id"),
-			"status": "Initiated",
+			# A successful STK push means the prompt reached the customer's phone and
+			# we're waiting on their PIN ("Pending"); a failed push is "Failed". Either
+			# is truer than a stuck "Initiated" that never advances.
+			"status": "Pending" if result.get("success") else "Failed",
 			"expected_amount": float(transaction.amount or 0),
 			"raw_request": result.get("raw_request"),
 			"raw_response": result.get("raw_response"),
