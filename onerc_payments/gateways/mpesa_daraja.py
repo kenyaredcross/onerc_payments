@@ -49,6 +49,14 @@ def client_ip():
 	return getattr(frappe.local, "request_ip", None) or ""
 
 
+def _as_int(value, default=-1):
+	"""Daraja is inconsistent about whether a result code is an int or a string."""
+	try:
+		return int(value)
+	except (TypeError, ValueError):
+		return default
+
+
 class MpesaDarajaGateway(BaseGateway):
 
 	def _base_url(self):
@@ -118,7 +126,22 @@ class MpesaDarajaGateway(BaseGateway):
 		return datetime.now().strftime("%Y%m%d%H%M%S")
 
 	def _callback_url(self, transaction):
-		base = self.settings.mpesa_callback_base_url.rstrip("/")
+		"""The URL Safaricom posts the receipt to. Everything depends on it.
+
+		The receipt only ever arrives on this callback, so a base URL that Safaricom
+		cannot reach means no M-Pesa code, ever - while the payment itself still
+		succeeds and the status poll still marks it Completed. That failure is silent,
+		so refuse to push at all rather than take a payment we can never receipt.
+		"""
+		base = (self.settings.mpesa_callback_base_url or "").strip().rstrip("/")
+		if not base:
+			base = (frappe.utils.get_url() or "").strip().rstrip("/")
+		if not base.startswith("https://") or "localhost" in base or "127.0.0.1" in base:
+			frappe.throw(
+				"M-Pesa cannot deliver a payment receipt to "
+				f"{base or '(no callback URL)'}. Set OneRC Payment Settings > "
+				"M-Pesa Callback Base URL to a public https address for this site."
+			)
 		return (
 			f"{base}/api/method/onerc_payments.api.v1.payment"
 			f".payment_callback?gateway_name=Mpesa+Daraja"
@@ -337,13 +360,16 @@ class MpesaDarajaGateway(BaseGateway):
 				"failure_reason": "Invalid callback structure",
 			}
 
-		result_code = callback.get("ResultCode")
+		# Daraja sends ResultCode as an int on the STK callback and as a string on the
+		# query response. Comparing it strictly to 0 read a successful "0" as a failure
+		# and dropped the receipt with it, so coerce before deciding.
+		result_code = _as_int(callback.get("ResultCode"))
 		result_desc = callback.get("ResultDesc")
 
 		if result_code == 0:
 			meta = {
 				item.get("Name"): item.get("Value")
-				for item in callback.get("CallbackMetadata", {}).get("Item", [])
+				for item in (callback.get("CallbackMetadata") or {}).get("Item", [])
 			}
 			receipt = meta.get("MpesaReceiptNumber")
 
