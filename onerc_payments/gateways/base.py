@@ -52,6 +52,16 @@ class BaseGateway(ABC):
 		"""
 		return None
 
+	def record_status_update(self, transaction, result):
+		"""Sync the per-gateway detail record when a status *query* (not a callback)
+		resolves a transaction, so the detail record doesn't lag behind.
+
+		Called by check_payment_status() after the transaction's status changes.
+		`result` is the dict returned by check_status(). Default: no-op, so gateways
+		without a detail record are unaffected.
+		"""
+		return None
+
 	def record_initiation_details(self, transaction, result):
 		"""Persist gateway-specific initiation data into the per-gateway detail
 		record and link it back, returning its docname (or None).

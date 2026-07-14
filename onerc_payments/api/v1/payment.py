@@ -138,6 +138,19 @@ def check_payment_status(transaction_id):
 			transaction.transaction_date = now_datetime()
 		if result.get("failure_reason"):
 			transaction.failure_reason = result["failure_reason"]
+
+		# Keep the per-gateway detail record (e.g. Mpesa Payment) in step with the
+		# transaction. Without this, a payment resolved by polling rather than by the
+		# callback would leave its detail record stuck on "Initiated". Best-effort:
+		# a detail-sync failure must never block resolving the payment itself.
+		try:
+			gateway.record_status_update(transaction, result)
+		except Exception as e:
+			frappe.logger().error(
+				f"onerc_payments: failed to sync gateway detail for "
+				f"{transaction.name}: {e}"
+			)
+
 		transaction.save(ignore_permissions=True)
 
 		if result["status"] == "Completed":
@@ -153,6 +166,25 @@ def check_payment_status(transaction_id):
 	}
 
 
+@frappe.whitelist()
+def reconcile_mpesa_payment(mpesa_payment):
+	"""Desk action: re-query the gateway for a single Mpesa Payment and sync it.
+
+	Lets an admin resolve a record that is still showing "Initiated"/"Pending"
+	(e.g. because the STK callback never reached us) straight from the form.
+	Note: the STK status query returns the payment's status but not the M-Pesa
+	receipt number - only the callback carries that - so this confirms whether a
+	payment went through, but the receipt itself still depends on the callback.
+	"""
+	frappe.has_permission("Mpesa Payment", "read", doc=mpesa_payment, throw=True)
+	transaction_id = frappe.db.get_value(
+		"Mpesa Payment", mpesa_payment, "payment_transaction"
+	)
+	if not transaction_id:
+		frappe.throw("This Mpesa Payment is not linked to a payment transaction.")
+	return check_payment_status(transaction_id)
+
+
 @frappe.whitelist(allow_guest=True)
 def payment_callback(gateway_name=None, **kwargs):
 	import json
@@ -163,9 +195,22 @@ def payment_callback(gateway_name=None, **kwargs):
 	# (e.g. Safaricom's published IPs in production). Drivers that can't verify
 	# the source return True by default, so other gateways are unaffected.
 	if not gateway.verify_callback_source():
-		frappe.logger().warning(
-			f"onerc_payments: callback rejected from untrusted source "
-			f"ip={_client_ip()} gateway={gateway_name}"
+		frappe.log_error(
+			title="M-Pesa callback rejected (untrusted source)",
+			message=(
+				f"A payment callback was rejected because its source could not be "
+				f"trusted, so its receipt was not stored.\n\n"
+				f"request_ip={_client_ip()}\n"
+				f"X-Forwarded-For={frappe.get_request_header('X-Forwarded-For')}\n"
+				f"CF-Connecting-IP={frappe.get_request_header('CF-Connecting-IP')}\n"
+				f"X-Real-IP={frappe.get_request_header('X-Real-IP')}\n"
+				f"gateway={gateway_name}\n\n"
+				f"If this was a genuine Safaricom callback, add its real source IP to "
+				f"the site_config key mpesa_extra_allowed_ips (comma-separated, CIDR "
+				f"supported). If your proxy chain can't expose the origin IP at all, "
+				f"set mpesa_verify_callback_ip = 0 to rely on the CheckoutRequestID "
+				f"match instead."
+			),
 		)
 		frappe.local.response["http_status_code"] = 403
 		return {"ResultCode": 1, "ResultDesc": "Forbidden"}
@@ -185,9 +230,13 @@ def payment_callback(gateway_name=None, **kwargs):
 	gateway_reference = _extract_gateway_reference(gateway_name, data)
 
 	if not gateway_reference:
-		frappe.logger().warning(
-			f"onerc_payments: callback received but no reference found. "
-			f"gateway={gateway_name} data={data}"
+		frappe.log_error(
+			title="M-Pesa callback: no reference found",
+			message=(
+				f"A callback was received but no gateway reference could be "
+				f"extracted, so it could not be matched to a payment.\n"
+				f"gateway={gateway_name}\ndata={data}"
+			),
 		)
 		return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
@@ -198,9 +247,12 @@ def payment_callback(gateway_name=None, **kwargs):
 	)
 
 	if not transaction_name:
-		frappe.logger().warning(
-			f"onerc_payments: no transaction found for reference "
-			f"{gateway_reference}"
+		frappe.log_error(
+			title="M-Pesa callback: no matching transaction",
+			message=(
+				f"A callback with reference {gateway_reference} could not be linked "
+				f"to any initiated payment, so its receipt was not stored."
+			),
 		)
 		return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
