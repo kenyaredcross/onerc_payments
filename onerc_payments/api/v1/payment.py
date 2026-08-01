@@ -99,12 +99,15 @@ def initiate_payment(
 		transaction.status = "Failed"
 		transaction.failure_reason = result.get("message")
 
-	if result.get("merchant_request_id"):
-		transaction.merchant_request_id = result.get("merchant_request_id")
-	if result.get("raw_request"):
-		transaction.raw_request = result.get("raw_request")
-	if result.get("raw_response"):
-		transaction.raw_response = result.get("raw_response")
+	# Gateway-specific initiation data (merchant ids, raw request/response) lives on
+	# the per-gateway detail doctype, not the generic transaction. Best-effort: a
+	# detail-record failure must never break initiating the payment.
+	try:
+		gateway.record_initiation_details(transaction, result)
+	except Exception as e:
+		frappe.logger().error(
+			f"onerc_payments: failed to record initiation details for {transaction.name}: {e}"
+		)
 
 	transaction.save(ignore_permissions=True)
 
@@ -128,11 +131,6 @@ def check_payment_status(transaction_id):
 	gateway = get_gateway()
 	result = gateway.check_status(transaction)
 
-	if result.get("result_code") is not None:
-		transaction.result_code = str(result.get("result_code"))
-	if result.get("result_description"):
-		transaction.result_description = result.get("result_description")
-
 	if result["status"] != transaction.status:
 		transaction.status = result["status"]
 		if result.get("gateway_receipt"):
@@ -140,6 +138,19 @@ def check_payment_status(transaction_id):
 			transaction.transaction_date = now_datetime()
 		if result.get("failure_reason"):
 			transaction.failure_reason = result["failure_reason"]
+
+		# Keep the per-gateway detail record (e.g. Mpesa Payment) in step with the
+		# transaction. Without this, a payment resolved by polling rather than by the
+		# callback would leave its detail record stuck on "Initiated". Best-effort:
+		# a detail-sync failure must never block resolving the payment itself.
+		try:
+			gateway.record_status_update(transaction, result)
+		except Exception as e:
+			frappe.logger().error(
+				f"onerc_payments: failed to sync gateway detail for "
+				f"{transaction.name}: {e}"
+			)
+
 		transaction.save(ignore_permissions=True)
 
 		if result["status"] == "Completed":
@@ -155,6 +166,25 @@ def check_payment_status(transaction_id):
 	}
 
 
+@frappe.whitelist()
+def reconcile_mpesa_payment(mpesa_payment):
+	"""Desk action: re-query the gateway for a single Mpesa Payment and sync it.
+
+	Lets an admin resolve a record that is still showing "Initiated"/"Pending"
+	(e.g. because the STK callback never reached us) straight from the form.
+	Note: the STK status query returns the payment's status but not the M-Pesa
+	receipt number - only the callback carries that - so this confirms whether a
+	payment went through, but the receipt itself still depends on the callback.
+	"""
+	frappe.has_permission("Mpesa Payment", "read", doc=mpesa_payment, throw=True)
+	transaction_id = frappe.db.get_value(
+		"Mpesa Payment", mpesa_payment, "payment_transaction"
+	)
+	if not transaction_id:
+		frappe.throw("This Mpesa Payment is not linked to a payment transaction.")
+	return check_payment_status(transaction_id)
+
+
 @frappe.whitelist(allow_guest=True)
 def payment_callback(gateway_name=None, **kwargs):
 	import json
@@ -165,9 +195,22 @@ def payment_callback(gateway_name=None, **kwargs):
 	# (e.g. Safaricom's published IPs in production). Drivers that can't verify
 	# the source return True by default, so other gateways are unaffected.
 	if not gateway.verify_callback_source():
-		frappe.logger().warning(
-			f"onerc_payments: callback rejected from untrusted source "
-			f"ip={_client_ip()} gateway={gateway_name}"
+		frappe.log_error(
+			title="M-Pesa callback rejected (untrusted source)",
+			message=(
+				f"A payment callback was rejected because its source could not be "
+				f"trusted, so its receipt was not stored.\n\n"
+				f"request_ip={_client_ip()}\n"
+				f"X-Forwarded-For={frappe.get_request_header('X-Forwarded-For')}\n"
+				f"CF-Connecting-IP={frappe.get_request_header('CF-Connecting-IP')}\n"
+				f"X-Real-IP={frappe.get_request_header('X-Real-IP')}\n"
+				f"gateway={gateway_name}\n\n"
+				f"If this was a genuine Safaricom callback, add its real source IP to "
+				f"the site_config key mpesa_extra_allowed_ips (comma-separated, CIDR "
+				f"supported). If your proxy chain can't expose the origin IP at all, "
+				f"set mpesa_verify_callback_ip = 0 to rely on the CheckoutRequestID "
+				f"match instead."
+			),
 		)
 		frappe.local.response["http_status_code"] = 403
 		return {"ResultCode": 1, "ResultDesc": "Forbidden"}
@@ -187,9 +230,13 @@ def payment_callback(gateway_name=None, **kwargs):
 	gateway_reference = _extract_gateway_reference(gateway_name, data)
 
 	if not gateway_reference:
-		frappe.logger().warning(
-			f"onerc_payments: callback received but no reference found. "
-			f"gateway={gateway_name} data={data}"
+		frappe.log_error(
+			title="M-Pesa callback: no reference found",
+			message=(
+				f"A callback was received but no gateway reference could be "
+				f"extracted, so it could not be matched to a payment.\n"
+				f"gateway={gateway_name}\ndata={data}"
+			),
 		)
 		return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
@@ -200,39 +247,47 @@ def payment_callback(gateway_name=None, **kwargs):
 	)
 
 	if not transaction_name:
-		frappe.logger().warning(
-			f"onerc_payments: no transaction found for reference "
-			f"{gateway_reference}"
+		frappe.log_error(
+			title="M-Pesa callback: no matching transaction",
+			message=(
+				f"A callback with reference {gateway_reference} could not be linked "
+				f"to any initiated payment, so its receipt was not stored."
+			),
 		)
 		return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 	# Idempotency: Safaricom retries callbacks until it gets a 200, and a retry
 	# may race the original. Lock the row (SELECT ... FOR UPDATE) so concurrent
-	# duplicates serialize; if the transaction is already resolved, ack without
-	# re-processing so the source-app hook (receipt / GL posting) never fires
-	# twice.
+	# duplicates serialize; if the transaction is already resolved we must not run
+	# the status transition again, or the source-app hook (receipt / GL posting)
+	# fires twice.
+	#
+	# But we cannot simply drop the callback either. The STK *query* used by the
+	# status poll resolves a payment to Completed while carrying no receipt - only
+	# this callback ever carries MpesaReceiptNumber. The poll (browser, every few
+	# seconds; scheduler, every few minutes) usually wins that race, so returning
+	# here threw the receipt away for good, and every payment showed a blank M-Pesa
+	# code. Absorb what only the callback knows, then stop.
 	current_status = frappe.db.get_value(
 		"OneRC Payment Transaction",
 		transaction_name,
 		"status",
 		for_update=True,
 	)
-	if current_status in ("Completed", "Failed", "Cancelled", "Refunded"):
-		return {"ResultCode": 0, "ResultDesc": "Accepted"}
+	already_resolved = current_status in ("Completed", "Failed", "Cancelled", "Refunded")
 
 	transaction_doc = frappe.get_doc(
 		"OneRC Payment Transaction", transaction_name
 	)
 	result = gateway.handle_callback(data, transaction_doc)
 
-	transaction_doc.status = result["status"]
-	transaction_doc.raw_response = frappe.as_json(data)
-	transaction_doc.callback_ip = _client_ip()
+	if already_resolved:
+		_absorb_late_receipt(gateway, data, transaction_doc, result)
+		return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-	if result.get("result_code") is not None:
-		transaction_doc.result_code = str(result.get("result_code"))
-	if result.get("result_description"):
-		transaction_doc.result_description = result.get("result_description")
+	# Neutral fields stay on the transaction; the raw gateway payload, result codes
+	# and callback IP are captured on the per-gateway detail record below.
+	transaction_doc.status = result["status"]
 
 	if result.get("gateway_receipt"):
 		transaction_doc.gateway_receipt = result["gateway_receipt"]
@@ -243,6 +298,17 @@ def payment_callback(gateway_name=None, **kwargs):
 	if result.get("failure_reason"):
 		transaction_doc.failure_reason = result["failure_reason"]
 
+	# Capture the full gateway payload (e.g. the M-Pesa receipt + metadata) into a
+	# dedicated detail record and link it here. Best-effort: a failure to record the
+	# detail must never block confirming the payment itself.
+	try:
+		gateway.record_payment_details(data, transaction_doc)
+	except Exception as e:
+		frappe.logger().error(
+			f"onerc_payments: failed to record gateway payment details for "
+			f"{transaction_doc.name}: {e}"
+		)
+
 	transaction_doc.save(ignore_permissions=True)
 	frappe.db.commit()
 
@@ -250,6 +316,60 @@ def payment_callback(gateway_name=None, **kwargs):
 		_notify_source_app(transaction_doc)
 
 	return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+def _absorb_late_receipt(gateway, data, transaction, result):
+	"""Take the receipt off a callback for a payment the poll already resolved.
+
+	The status transition and ``on_payment_confirmed`` have already happened, so we
+	deliberately do NOT re-run them - that would post a receipt or a GL entry twice.
+	What we do take is the one thing the callback alone can tell us: the M-Pesa code
+	(and the full payload, onto the gateway detail record). The source app is then
+	given the receipt it never got, via the optional ``on_payment_receipt`` hook.
+	"""
+	receipt = result.get("gateway_receipt")
+
+	if receipt and not transaction.gateway_receipt:
+		transaction.db_set("gateway_receipt", receipt, update_modified=False)
+		transaction.db_set(
+			"transaction_date",
+			result.get("transaction_date") or now_datetime(),
+			update_modified=False,
+		)
+		transaction.gateway_receipt = receipt
+
+	# Best-effort: the raw payload / result codes belong on the per-gateway detail
+	# record whether or not a receipt came with them (a failed callback is evidence too).
+	try:
+		gateway.record_payment_details(data, transaction)
+	except Exception as e:
+		frappe.logger().error(
+			f"onerc_payments: failed to record late gateway payment details for "
+			f"{transaction.name}: {e}"
+		)
+
+	frappe.db.commit()
+
+	if receipt:
+		_notify_source_receipt(transaction, receipt)
+
+
+def _notify_source_receipt(transaction, receipt):
+	"""Hand a late-arriving receipt to the source app, if it wants one.
+
+	Separate from ``on_payment_confirmed``: the payment was already confirmed, so
+	only the receipt is new. A source doc that does not implement the hook is fine -
+	it just keeps whatever reference it recorded at confirmation.
+	"""
+	try:
+		doc = frappe.get_doc(transaction.source_doctype, transaction.source_document)
+		if hasattr(doc, "on_payment_receipt"):
+			doc.on_payment_receipt(receipt=receipt, transaction_id=transaction.name)
+	except Exception as e:
+		frappe.logger().error(
+			f"onerc_payments: could not hand receipt {receipt} to "
+			f"{transaction.source_doctype} {transaction.source_document}: {e}"
+		)
 
 
 def _notify_source_app(transaction):
@@ -276,15 +396,20 @@ def _extract_gateway_reference(gateway_name, data):
 	"""
 	Extract the gateway reference from a callback payload.
 	Each gateway puts it in a different place.
+
+	``gateway_name`` reaches us as a query parameter on the CallBackURL, which is the
+	one part of the URL we cannot count on: Daraja is fussy about query strings, and a
+	proxy or rewrite in front of the site can drop them. So we also recognise a payload
+	by its shape - an M-Pesa STK callback is the only one carrying Body.stkCallback -
+	rather than silently failing to match the transaction and binning the receipt.
 	"""
-	if "mpesa" in gateway_name.lower():
-		return (
-			data.get("Body", {})
-			    .get("stkCallback", {})
-			    .get("CheckoutRequestID")
-		)
-	if "mtn" in gateway_name.lower():
+	gateway_name = (gateway_name or "").lower()
+
+	stk = (data.get("Body") or {}).get("stkCallback") or {}
+	if stk or "mpesa" in gateway_name:
+		return stk.get("CheckoutRequestID")
+	if "mtn" in gateway_name:
 		return data.get("financialTransactionId") or data.get("externalId")
-	if "stripe" in gateway_name.lower():
+	if "stripe" in gateway_name:
 		return data.get("id")
 	return data.get("reference") or data.get("transaction_id")

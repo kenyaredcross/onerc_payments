@@ -38,6 +38,44 @@ class BaseGateway(ABC):
 		"""
 		return True
 
+	def record_payment_details(self, data, transaction):
+		"""Persist a gateway-specific detail record from a verified callback and
+		return its docname (or None).
+
+		Called by the callback endpoint AFTER verify_callback_source() has passed
+		and the callback has been matched to an initiated transaction, so the driver
+		may trust `data` exactly as much as the transaction it already matched. Use
+		it to capture the full gateway payload (e.g. the M-Pesa receipt + metadata)
+		into a dedicated doctype and link it to `transaction`.
+
+		Default: no detail record, so existing drivers are unaffected.
+		"""
+		return None
+
+	def record_status_update(self, transaction, result):
+		"""Sync the per-gateway detail record when a status *query* (not a callback)
+		resolves a transaction, so the detail record doesn't lag behind.
+
+		Called by check_payment_status() after the transaction's status changes.
+		`result` is the dict returned by check_status(). Default: no-op, so gateways
+		without a detail record are unaffected.
+		"""
+		return None
+
+	def record_initiation_details(self, transaction, result):
+		"""Persist gateway-specific initiation data into the per-gateway detail
+		record and link it back, returning its docname (or None).
+
+		Called by initiate_payment() after the gateway responds, so raw request/
+		response payloads and any gateway ids from initiation live on the detail
+		doctype instead of the generic transaction. Set
+		``transaction.gateway_detail_doctype`` / ``transaction.gateway_detail`` here;
+		the caller saves the transaction afterwards.
+
+		Default: no detail record, so existing drivers are unaffected.
+		"""
+		return None
+
 	@abstractmethod
 	def initiate(self, transaction):
 		"""
