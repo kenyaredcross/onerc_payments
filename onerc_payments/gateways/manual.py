@@ -85,13 +85,30 @@ class ManualGateway(BaseGateway):
 @frappe.whitelist()
 def confirm_payment(transaction_name, receipt_number):
 	"""
-	Admin calls this to manually confirm a payment.
-	Can be wired to a custom button on the
-	OneRC Payment Transaction form.
+	Confirm a manually collected payment — cash at a branch, or a bank transfer.
+
+	Wired to the Confirm Payment button on the OneRC Payment Transaction form.
+
+	**Write permission on the transaction is the gate, and it is not optional.**
+	This method is whitelisted, so without a check any authenticated user could
+	call it against any docname and mark it Completed — and because completion
+	notifies the source app through `_notify_source_app`, that is not merely a
+	wrong status: it is the applicant activating their own membership without
+	paying for it. The check is `has_permission`, so who may confirm stays a
+	role question the site answers, exactly like every other write here.
+
+	The save below keeps `ignore_permissions=True` deliberately: authority has
+	been established at the boundary, and the fields being written — status,
+	receipt, the detail link — are read-only on the form precisely so that they
+	move through this path rather than by hand.
 	"""
 	transaction = frappe.get_doc(
 		"OneRC Payment Transaction",
 		transaction_name,
+	)
+
+	frappe.has_permission(
+		"OneRC Payment Transaction", ptype="write", doc=transaction, throw=True
 	)
 
 	if transaction.status != "Pending":
