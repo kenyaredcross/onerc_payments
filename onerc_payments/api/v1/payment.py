@@ -128,6 +128,15 @@ def check_payment_status(transaction_id):
 	internally by the scheduler there is no request, so the limit is skipped.
 	"""
 	transaction = frappe.get_doc("OneRC Payment Transaction", transaction_id)
+	# Snapshot the doc before the gateway sees it. check_status is free to enrich the
+	# transaction in place (gateway reference, receipt, failure detail) even when the
+	# status itself has not moved, and those writes must not be dropped.
+	#
+	# Compared by value rather than through a framework dirty-check: this line used to
+	# call Document.is_dirty(), which upstream removed, and every poll then died with
+	# AttributeError - a 500 on the endpoint the vendor portal polls to learn that its
+	# payment cleared. A local snapshot cannot be taken away from us.
+	before = transaction.as_dict(no_default_fields=True)
 	gateway = get_gateway()
 	result = gateway.check_status(transaction)
 
@@ -155,7 +164,7 @@ def check_payment_status(transaction_id):
 
 		if result["status"] == "Completed":
 			_notify_source_app(transaction)
-	elif transaction.is_dirty():
+	elif transaction.as_dict(no_default_fields=True) != before:
 		transaction.save(ignore_permissions=True)
 
 	return {
