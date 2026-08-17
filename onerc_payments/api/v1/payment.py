@@ -128,6 +128,15 @@ def check_payment_status(transaction_id):
 	internally by the scheduler there is no request, so the limit is skipped.
 	"""
 	transaction = frappe.get_doc("OneRC Payment Transaction", transaction_id)
+	# Snapshot the doc before the gateway sees it. check_status is free to enrich the
+	# transaction in place (gateway reference, receipt, failure detail) even when the
+	# status itself has not moved, and those writes must not be dropped.
+	#
+	# Compared by value rather than through a framework dirty-check: this line used to
+	# call Document.is_dirty(), which upstream removed, and every poll then died with
+	# AttributeError - a 500 on the endpoint the vendor portal polls to learn that its
+	# payment cleared. A local snapshot cannot be taken away from us.
+	before = transaction.as_dict(no_default_fields=True)
 	gateway = get_gateway()
 	result = gateway.check_status(transaction)
 
@@ -155,7 +164,7 @@ def check_payment_status(transaction_id):
 
 		if result["status"] == "Completed":
 			_notify_source_app(transaction)
-	elif transaction.is_dirty():
+	elif transaction.as_dict(no_default_fields=True) != before:
 		transaction.save(ignore_permissions=True)
 
 	return {
@@ -258,22 +267,32 @@ def payment_callback(gateway_name=None, **kwargs):
 
 	# Idempotency: Safaricom retries callbacks until it gets a 200, and a retry
 	# may race the original. Lock the row (SELECT ... FOR UPDATE) so concurrent
-	# duplicates serialize; if the transaction is already resolved, ack without
-	# re-processing so the source-app hook (receipt / GL posting) never fires
-	# twice.
+	# duplicates serialize; if the transaction is already resolved we must not run
+	# the status transition again, or the source-app hook (receipt / GL posting)
+	# fires twice.
+	#
+	# But we cannot simply drop the callback either. The STK *query* used by the
+	# status poll resolves a payment to Completed while carrying no receipt - only
+	# this callback ever carries MpesaReceiptNumber. The poll (browser, every few
+	# seconds; scheduler, every few minutes) usually wins that race, so returning
+	# here threw the receipt away for good, and every payment showed a blank M-Pesa
+	# code. Absorb what only the callback knows, then stop.
 	current_status = frappe.db.get_value(
 		"OneRC Payment Transaction",
 		transaction_name,
 		"status",
 		for_update=True,
 	)
-	if current_status in ("Completed", "Failed", "Cancelled", "Refunded"):
-		return {"ResultCode": 0, "ResultDesc": "Accepted"}
+	already_resolved = current_status in ("Completed", "Failed", "Cancelled", "Refunded")
 
 	transaction_doc = frappe.get_doc(
 		"OneRC Payment Transaction", transaction_name
 	)
 	result = gateway.handle_callback(data, transaction_doc)
+
+	if already_resolved:
+		_absorb_late_receipt(gateway, data, transaction_doc, result)
+		return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 	# Neutral fields stay on the transaction; the raw gateway payload, result codes
 	# and callback IP are captured on the per-gateway detail record below.
@@ -308,6 +327,60 @@ def payment_callback(gateway_name=None, **kwargs):
 	return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
+def _absorb_late_receipt(gateway, data, transaction, result):
+	"""Take the receipt off a callback for a payment the poll already resolved.
+
+	The status transition and ``on_payment_confirmed`` have already happened, so we
+	deliberately do NOT re-run them - that would post a receipt or a GL entry twice.
+	What we do take is the one thing the callback alone can tell us: the M-Pesa code
+	(and the full payload, onto the gateway detail record). The source app is then
+	given the receipt it never got, via the optional ``on_payment_receipt`` hook.
+	"""
+	receipt = result.get("gateway_receipt")
+
+	if receipt and not transaction.gateway_receipt:
+		transaction.db_set("gateway_receipt", receipt, update_modified=False)
+		transaction.db_set(
+			"transaction_date",
+			result.get("transaction_date") or now_datetime(),
+			update_modified=False,
+		)
+		transaction.gateway_receipt = receipt
+
+	# Best-effort: the raw payload / result codes belong on the per-gateway detail
+	# record whether or not a receipt came with them (a failed callback is evidence too).
+	try:
+		gateway.record_payment_details(data, transaction)
+	except Exception as e:
+		frappe.logger().error(
+			f"onerc_payments: failed to record late gateway payment details for "
+			f"{transaction.name}: {e}"
+		)
+
+	frappe.db.commit()
+
+	if receipt:
+		_notify_source_receipt(transaction, receipt)
+
+
+def _notify_source_receipt(transaction, receipt):
+	"""Hand a late-arriving receipt to the source app, if it wants one.
+
+	Separate from ``on_payment_confirmed``: the payment was already confirmed, so
+	only the receipt is new. A source doc that does not implement the hook is fine -
+	it just keeps whatever reference it recorded at confirmation.
+	"""
+	try:
+		doc = frappe.get_doc(transaction.source_doctype, transaction.source_document)
+		if hasattr(doc, "on_payment_receipt"):
+			doc.on_payment_receipt(receipt=receipt, transaction_id=transaction.name)
+	except Exception as e:
+		frappe.logger().error(
+			f"onerc_payments: could not hand receipt {receipt} to "
+			f"{transaction.source_doctype} {transaction.source_document}: {e}"
+		)
+
+
 def _notify_source_app(transaction):
 	"""
 	Tell the source app the payment is complete.
@@ -332,15 +405,20 @@ def _extract_gateway_reference(gateway_name, data):
 	"""
 	Extract the gateway reference from a callback payload.
 	Each gateway puts it in a different place.
+
+	``gateway_name`` reaches us as a query parameter on the CallBackURL, which is the
+	one part of the URL we cannot count on: Daraja is fussy about query strings, and a
+	proxy or rewrite in front of the site can drop them. So we also recognise a payload
+	by its shape - an M-Pesa STK callback is the only one carrying Body.stkCallback -
+	rather than silently failing to match the transaction and binning the receipt.
 	"""
-	if "mpesa" in gateway_name.lower():
-		return (
-			data.get("Body", {})
-			    .get("stkCallback", {})
-			    .get("CheckoutRequestID")
-		)
-	if "mtn" in gateway_name.lower():
+	gateway_name = (gateway_name or "").lower()
+
+	stk = (data.get("Body") or {}).get("stkCallback") or {}
+	if stk or "mpesa" in gateway_name:
+		return stk.get("CheckoutRequestID")
+	if "mtn" in gateway_name:
 		return data.get("financialTransactionId") or data.get("externalId")
-	if "stripe" in gateway_name.lower():
+	if "stripe" in gateway_name:
 		return data.get("id")
 	return data.get("reference") or data.get("transaction_id")
