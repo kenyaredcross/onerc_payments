@@ -155,8 +155,6 @@ def check_payment_status(transaction_id):
 
 		if result["status"] == "Completed":
 			_notify_source_app(transaction)
-	elif transaction.is_dirty():
-		transaction.save(ignore_permissions=True)
 
 	return {
 		"transaction_id": transaction.name,
@@ -190,6 +188,14 @@ def payment_callback(gateway_name=None, **kwargs):
 	import json
 
 	gateway = get_gateway()
+	# `gateway_name` on the CallBackURL query string is unreliable: Frappe's
+	# make_form_dict() replaces form_dict wholesale with the parsed JSON body for
+	# any application/json request (frappe/app.py), so a JSON-bodied callback -
+	# which is exactly what every gateway here sends - never sees its query
+	# string at all. Fall back to the actually-configured active gateway, which
+	# get_gateway() above already resolved independently of this request.
+	if not gateway_name:
+		gateway_name = frappe.get_single("OneRC Payment Settings").active_gateway or ""
 
 	# Reject callbacks that don't originate from the gateway's trusted source
 	# (e.g. Safaricom's published IPs in production). Drivers that can't verify
@@ -224,9 +230,6 @@ def payment_callback(gateway_name=None, **kwargs):
 	if not data:
 		data = {k: v for k, v in frappe.form_dict.items() if k != "cmd"}
 
-	if not gateway_name:
-		gateway_name = data.get("gateway_name", "")
-
 	gateway_reference = _extract_gateway_reference(gateway_name, data)
 
 	if not gateway_reference:
@@ -258,16 +261,26 @@ def payment_callback(gateway_name=None, **kwargs):
 
 	# Idempotency: Safaricom retries callbacks until it gets a 200, and a retry
 	# may race the original. Lock the row (SELECT ... FOR UPDATE) so concurrent
-	# duplicates serialize; if the transaction is already resolved, ack without
-	# re-processing so the source-app hook (receipt / GL posting) never fires
-	# twice.
-	current_status = frappe.db.get_value(
+	# duplicates serialize; if the transaction is already resolved WITH a
+	# receipt, ack without re-processing. A transaction that was already
+	# resolved by the polling fallback (check_payment_status) is the one
+	# exception: that path never carries a receipt number, so a
+	# Completed-without-receipt transaction still needs this callback to fill
+	# it in. It's safe to call _notify_source_app() again in that case -
+	# confirm_application_payment()/confirm_batch_payment() are themselves
+	# idempotent on payment_status and additionally backfill the source
+	# document's stored reference when a better one (an actual receipt,
+	# not just the CheckoutRequestID) arrives late.
+	current = frappe.db.get_value(
 		"OneRC Payment Transaction",
 		transaction_name,
-		"status",
+		["status", "gateway_receipt"],
 		for_update=True,
+		as_dict=True,
 	)
-	if current_status in ("Completed", "Failed", "Cancelled", "Refunded"):
+	if current.status in ("Failed", "Cancelled", "Refunded"):
+		return {"ResultCode": 0, "ResultDesc": "Accepted"}
+	if current.status == "Completed" and current.gateway_receipt:
 		return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 	transaction_doc = frappe.get_doc(
@@ -311,7 +324,10 @@ def payment_callback(gateway_name=None, **kwargs):
 def _notify_source_app(transaction):
 	"""
 	Tell the source app the payment is complete.
-	Calls on_payment_confirmed() on the source document if it exists.
+	Calls on_payment_confirmed() on the source document if it exists. Safe to
+	call more than once for the same transaction: the source app's own handler
+	is idempotent on its payment_status and backfills a late-arriving receipt
+	even when it was already activated by the polling fallback.
 	"""
 	try:
 		doc = frappe.get_doc(transaction.source_doctype, transaction.source_document)

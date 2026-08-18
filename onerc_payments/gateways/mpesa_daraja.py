@@ -19,6 +19,8 @@ from frappe.utils.password import get_decrypted_password
 
 from .base import BaseGateway
 
+DARAJA_TOKEN_CACHE_KEY = "onerc_payments:daraja_token"
+
 SANDBOX_BASE = "https://sandbox.safaricom.co.ke"
 PRODUCTION_BASE = "https://api.safaricom.co.ke"
 
@@ -57,7 +59,7 @@ class MpesaDarajaGateway(BaseGateway):
 		return SANDBOX_BASE
 
 	def _get_token(self):
-		cache_key = "onerc_payments:daraja_token"
+		cache_key = DARAJA_TOKEN_CACHE_KEY
 		cached = frappe.cache().get_value(cache_key)
 		if cached:
 			return cached
