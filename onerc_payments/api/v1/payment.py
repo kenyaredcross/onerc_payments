@@ -140,7 +140,13 @@ def check_payment_status(transaction_id):
 	internally by the scheduler there is no request, so the limit is skipped.
 	"""
 	transaction = frappe.get_doc("OneRC Payment Transaction", transaction_id)
-	gateway = get_gateway()
+	# The gateway that *collected* this, not whichever one the site has active
+	# now. Those were the same thing until a caller could name one, and they stop
+	# being the same the moment an organisation takes both M-Pesa and bank
+	# transfer: polling an M-Pesa payment with the manual driver would report it
+	# as unresolved for ever. Falls back to the active gateway for a transaction
+	# written before the column carried anything.
+	gateway = get_gateway(transaction.gateway)
 	result = gateway.check_status(transaction)
 
 	if result["status"] != transaction.status:
@@ -298,6 +304,15 @@ def payment_callback(gateway_name=None, **kwargs):
 	transaction_doc = frappe.get_doc(
 		"OneRC Payment Transaction", transaction_name
 	)
+
+	# Re-resolved to the gateway that collected this payment, now that we know
+	# which payment it is. The driver above was only ever for
+	# `verify_callback_source`, which has to run before the transaction is known
+	# and must therefore not be chosen by anything in the request — `gateway_name`
+	# arrives from the caller, and a callback that could pick its own driver could
+	# pick one whose source check passes.
+	gateway = get_gateway(transaction_doc.gateway)
+
 	result = gateway.handle_callback(data, transaction_doc)
 
 	# Neutral fields stay on the transaction; the raw gateway payload, result codes
