@@ -55,9 +55,18 @@ def initiate_payment(
 	recipient_phone=None,
 	recipient_account=None,
 	metadata=None,
+	gateway=None,
 ):
 	"""
 	Initiate a payment. Called by any OneRC app.
+
+	`gateway` names which gateway to collect through. Omitted, the one set as
+	active in OneRC Payment Settings is used, so every existing caller behaves
+	exactly as it did. It exists because a site may keep several gateways live
+	at once and let the payer pick: an organisation taking both M-Pesa and bank
+	transfer offers both, and a single site-wide setting can only answer for one
+	of them — which meant a payer with no mobile money account had no way to say
+	so. A named gateway that is not active is refused; see `get_gateway`.
 
 	Returns:
 	{
@@ -69,9 +78,13 @@ def initiate_payment(
 	"""
 	settings = frappe.get_single("OneRC Payment Settings")
 
+	# Resolved before the transaction is written, so a bad gateway name is
+	# refused without leaving an Initiated row nobody will ever resolve.
+	driver = get_gateway(gateway)
+
 	transaction = frappe.get_doc({
 		"doctype": "OneRC Payment Transaction",
-		"gateway": settings.active_gateway,
+		"gateway": (gateway or "").strip() or settings.active_gateway,
 		"direction": direction,
 		"status": "Initiated",
 		"amount": float(amount),
@@ -89,8 +102,7 @@ def initiate_payment(
 	})
 	transaction.insert(ignore_permissions=True)
 
-	gateway = get_gateway()
-	result = gateway.initiate(transaction)
+	result = driver.initiate(transaction)
 
 	if result.get("success"):
 		transaction.status = "Pending"
@@ -103,7 +115,7 @@ def initiate_payment(
 	# the per-gateway detail doctype, not the generic transaction. Best-effort: a
 	# detail-record failure must never break initiating the payment.
 	try:
-		gateway.record_initiation_details(transaction, result)
+		driver.record_initiation_details(transaction, result)
 	except Exception as e:
 		frappe.logger().error(
 			f"onerc_payments: failed to record initiation details for {transaction.name}: {e}"
