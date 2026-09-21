@@ -22,6 +22,27 @@ from .base import BaseGateway
 SANDBOX_BASE = "https://sandbox.safaricom.co.ke"
 PRODUCTION_BASE = "https://api.safaricom.co.ke"
 
+# STK ResultCodes that mean the push is finished and did NOT succeed. Anything here
+# is final: the customer will never be prompted again for this CheckoutRequestID, so
+# the transaction must be resolved rather than left Pending for the poller to re-query
+# once an hour for ever - which is what happened to wrong-PIN (2001) attempts.
+#
+# Deliberately an explicit list, not "any non-zero code". A code we do not recognise
+# stays Pending, because resolving it to Failed is not free: payment_callback() short-
+# circuits on a Failed transaction, so a premature Failed would make us DISCARD a
+# genuine callback that arrived afterwards. Leaving an unknown code Pending only costs
+# another poll.
+TERMINAL_STK_FAILURE_CODES = frozenset([
+	"1",     # insufficient balance
+	"1001",  # another transaction is already in process for this subscriber
+	"1019",  # transaction expired
+	"1025",  # error sending the push / message too long
+	"1032",  # cancelled by the customer
+	"1037",  # timed out - customer never entered the PIN / phone unreachable
+	"2001",  # wrong M-Pesa PIN entered
+	"9999",  # unhandled error on Safaricom's side while pushing
+])
+
 # Safaricom Daraja publishes a fixed set of source IPs for callbacks.
 # Reference: https://developer.safaricom.co.ke/Documentation
 # Operators can extend this via frappe.conf.mpesa_extra_allowed_ips
@@ -336,8 +357,7 @@ class MpesaDarajaGateway(BaseGateway):
 				"result_description": result_desc,
 			}
 
-		# 1032 = cancelled by user, 1037 = timeout (PIN not entered).
-		if result_code in ("1032", "1037"):
+		if result_code in TERMINAL_STK_FAILURE_CODES:
 			return {
 				"status": "Failed",
 				"failure_reason": result_desc,
