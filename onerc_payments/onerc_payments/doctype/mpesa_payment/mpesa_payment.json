@@ -9,6 +9,7 @@
   "payment_transaction",
   "status",
   "mpesa_receipt_number",
+  "receipt_source",
   "merchant_request_id",
   "checkout_request_id",
   "column_break_ids",
@@ -25,7 +26,12 @@
   "callback_ip",
   "raw_request",
   "raw_response",
-  "raw_callback"
+  "raw_callback",
+  "receipt_lookup_section",
+  "status_query_conversation_id",
+  "status_query_requested_on",
+  "column_break_lookup",
+  "raw_status_result"
  ],
  "fields": [
   {
@@ -159,11 +165,49 @@
    "label": "Raw Callback",
    "options": "JSON",
    "read_only": 1
+  },
+  {
+   "fieldname": "receipt_source",
+   "fieldtype": "Select",
+   "label": "Receipt Source",
+   "options": "\nCallback\nStatus Query\nEntered by Staff",
+   "read_only": 1,
+   "description": "How the M-Pesa receipt number reached this record."
+  },
+  {
+   "fieldname": "receipt_lookup_section",
+   "fieldtype": "Section Break",
+   "label": "Receipt Lookup",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "status_query_conversation_id",
+   "fieldtype": "Data",
+   "label": "Status Query Conversation ID",
+   "read_only": 1,
+   "description": "Daraja's ConversationID for the last Transaction Status query. Its result is matched back to this record by this value."
+  },
+  {
+   "fieldname": "status_query_requested_on",
+   "fieldtype": "Datetime",
+   "label": "Status Query Requested On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_lookup",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "raw_status_result",
+   "fieldtype": "Code",
+   "label": "Raw Status Result",
+   "options": "JSON",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-07-01 00:00:00.000000",
+ "modified": "2026-11-09 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Onerc Payments",
  "name": "Mpesa Payment",

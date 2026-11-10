@@ -17,6 +17,8 @@
   "column_break_pzpx",
   "mpesa_passkey",
   "mpesa_shortcode",
+  "mpesa_initiator_name",
+  "mpesa_security_credential",
   "manual__bank_transfer_section",
   "manual_bank_name",
   "manual_account_number",
@@ -111,13 +113,25 @@
   {
    "fieldname": "column_break_yseu",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "mpesa_initiator_name",
+   "fieldtype": "Data",
+   "label": "MPESA Initiator Name",
+   "description": "The API operator Safaricom set up for this shortcode. Needed only to look up an M-Pesa code that a lost callback never delivered."
+  },
+  {
+   "fieldname": "mpesa_security_credential",
+   "fieldtype": "Password",
+   "label": "MPESA Security Credential",
+   "description": "The initiator's password encrypted with Safaricom's certificate, as generated on the Daraja portal for this environment."
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-06-03 19:51:54.978094",
+ "modified": "2026-11-09 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Onerc Payments",
  "name": "OneRC Payment Settings",

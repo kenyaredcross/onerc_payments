@@ -366,13 +366,7 @@ def _absorb_late_receipt(gateway, data, transaction, result):
 	receipt = result.get("gateway_receipt")
 
 	if receipt and not transaction.gateway_receipt:
-		transaction.db_set("gateway_receipt", receipt, update_modified=False)
-		transaction.db_set(
-			"transaction_date",
-			result.get("transaction_date") or now_datetime(),
-			update_modified=False,
-		)
-		transaction.gateway_receipt = receipt
+		_store_receipt(transaction, receipt, result.get("transaction_date") or now_datetime())
 
 	# Best-effort: the raw payload / result codes belong on the per-gateway detail
 	# record whether or not a receipt came with them (a failed callback is evidence too).
@@ -388,6 +382,253 @@ def _absorb_late_receipt(gateway, data, transaction, result):
 
 	if receipt:
 		_notify_source_receipt(transaction, receipt)
+
+
+def _store_receipt(transaction, receipt, transaction_date=None):
+	"""Write a receipt onto a transaction that is already resolved.
+
+	``db_set`` without touching ``modified``: the status transition happened earlier
+	and the record should still say when. ``transaction_date`` is set only when the
+	source knows when the money moved; a code typed in by staff does not, and the
+	source app then falls back to the date it recorded the payment.
+	"""
+	transaction.db_set("gateway_receipt", receipt, update_modified=False)
+	if transaction_date:
+		transaction.db_set("transaction_date", transaction_date, update_modified=False)
+	transaction.gateway_receipt = receipt
+
+
+# ── RECOVERING A RECEIPT THE CALLBACK NEVER DELIVERED ──────────────────────
+#
+# A payment confirmed by the status poll has no receipt until the callback comes.
+# If the callback is lost, staff can type the code from the payer's message, or
+# ask the gateway to look it up. Either way the receipt only ever fills a blank:
+# a receipt already on a transaction is never replaced, and the source app hears
+# about it through ``on_payment_receipt`` exactly as for a late callback.
+
+
+def _assert_receipt_missing(transaction):
+	if transaction.status != "Completed":
+		frappe.throw(
+			f"{transaction.name} is {transaction.status}, not Completed. Only a "
+			"completed payment can be given its receipt."
+		)
+	if transaction.gateway_receipt:
+		frappe.throw(f"{transaction.name} already has receipt {transaction.gateway_receipt}.")
+
+
+def _receipt_used_by(receipt, transaction_name):
+	"""The other transaction that already carries this receipt, if any."""
+	return frappe.db.get_value(
+		"OneRC Payment Transaction",
+		{"gateway_receipt": receipt, "name": ("!=", transaction_name)},
+		"name",
+	)
+
+
+@frappe.whitelist()
+def receipt_options(transaction_name):
+	"""What the desk may offer for a transaction with no receipt."""
+	transaction = frappe.get_doc("OneRC Payment Transaction", transaction_name)
+	frappe.has_permission("OneRC Payment Transaction", ptype="read", doc=transaction, throw=True)
+
+	missing = transaction.status == "Completed" and not transaction.gateway_receipt
+	if not missing or not transaction.gateway:
+		return {"missing": False, "can_enter": False, "can_request": False}
+
+	try:
+		gateway = get_gateway(transaction.gateway)
+	except Exception:
+		return {"missing": True, "can_enter": False, "can_request": False}
+
+	return {
+		"missing": True,
+		"can_enter": bool(getattr(gateway, "accepts_entered_receipt", False)),
+		"can_request": bool(gateway.can_request_receipt()),
+		"last_requested_on": frappe.db.get_value(
+			"Mpesa Payment",
+			{"payment_transaction": transaction.name},
+			"status_query_requested_on",
+		) if transaction.gateway_detail_doctype == "Mpesa Payment" else None,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def record_gateway_receipt(transaction_name, receipt):
+	"""Staff enter the receipt from the payer's message, e.g. the M-Pesa SMS.
+
+	Write permission on the transaction is the gate, as for ``confirm_payment``.
+	The code is checked for shape by the gateway and refused if another
+	transaction already carries it, which is the one mistake that matters: the
+	same SMS used to receipt two payments.
+	"""
+	transaction = frappe.get_doc("OneRC Payment Transaction", transaction_name)
+	frappe.has_permission("OneRC Payment Transaction", ptype="write", doc=transaction, throw=True)
+
+	# Serialise against a late callback or status result landing at the same time.
+	frappe.db.get_value("OneRC Payment Transaction", transaction.name, "status", for_update=True)
+	transaction.reload()
+	_assert_receipt_missing(transaction)
+
+	gateway = get_gateway(transaction.gateway)
+	code = gateway.normalise_receipt(receipt)
+
+	other = _receipt_used_by(code, transaction.name)
+	if other:
+		frappe.throw(f"Receipt {code} is already recorded on {other}. Check the code with the payer.")
+
+	_store_receipt(transaction, code)
+
+	try:
+		gateway.record_entered_receipt(transaction, code)
+	except Exception as e:
+		frappe.logger().error(
+			f"onerc_payments: failed to note entered receipt on the detail record of {transaction.name}: {e}"
+		)
+
+	transaction.add_comment(
+		"Info",
+		f"Receipt {code} entered by {frappe.utils.get_fullname(frappe.session.user)} "
+		"from the payer's message.",
+	)
+
+	_notify_source_receipt(transaction, code)
+	return {"receipt": code}
+
+
+@frappe.whitelist(methods=["POST"])
+def request_gateway_receipt(transaction_name):
+	"""Ask the gateway to look up the receipt. The answer arrives later, on
+	``receipt_query_result``; the form is reloaded by the person to see it."""
+	transaction = frappe.get_doc("OneRC Payment Transaction", transaction_name)
+	frappe.has_permission("OneRC Payment Transaction", ptype="write", doc=transaction, throw=True)
+	_assert_receipt_missing(transaction)
+
+	gateway = get_gateway(transaction.gateway)
+	if not gateway.can_request_receipt():
+		frappe.throw("This payment method is not set up to look up receipts.")
+
+	gateway.request_receipt(transaction)
+	return {"requested": True}
+
+
+def _request_json():
+	import json
+
+	try:
+		raw = frappe.request.data
+		return json.loads(raw) if raw else {}
+	except Exception:
+		return {}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def receipt_query_result(**kwargs):
+	"""Daraja posts the answer to a Transaction Status query here (also its queue
+	timeout).
+
+	The result is matched by its ConversationID, which Safaricom issued to us when
+	we asked and which nobody else has seen, and then the source IP is checked
+	exactly as for the STK callback. A receipt is taken only if the lookup is
+	unambiguous: the amount matches what we asked for and no other transaction
+	already carries the code. Anything else is logged for a person to look at,
+	because a wrong code on a receipt is worse than a blank one.
+	"""
+	accepted = {"ResultCode": 0, "ResultDesc": "Accepted"}
+	data = _request_json()
+	conversation_id = ((data.get("Result") or {}).get("ConversationID")) if isinstance(data, dict) else None
+
+	detail = frappe.db.get_value(
+		"Mpesa Payment",
+		{"status_query_conversation_id": conversation_id},
+		["name", "payment_transaction"],
+		as_dict=True,
+	) if conversation_id else None
+
+	if not detail or not detail.payment_transaction:
+		frappe.log_error(
+			title="M-Pesa receipt lookup: no matching request",
+			message=f"A Transaction Status result for ConversationID {conversation_id} matched no lookup we sent.",
+		)
+		return accepted
+
+	transaction = frappe.get_doc("OneRC Payment Transaction", detail.payment_transaction)
+	gateway = get_gateway(transaction.gateway)
+
+	if not gateway.verify_callback_source():
+		frappe.log_error(
+			title="M-Pesa receipt lookup rejected (untrusted source)",
+			message=(
+				f"A Transaction Status result for {transaction.name} came from a source that "
+				f"could not be trusted, so it was ignored.\nrequest_ip={_client_ip()}\n"
+				f"X-Forwarded-For={frappe.get_request_header('X-Forwarded-For')}"
+			),
+		)
+		frappe.local.response["http_status_code"] = 403
+		return {"ResultCode": 1, "ResultDesc": "Forbidden"}
+
+	parser = getattr(gateway, "parse_receipt_result", None)
+	parsed = parser(data) if parser else {}
+
+	frappe.db.set_value(
+		"Mpesa Payment", detail.name, "raw_status_result", frappe.as_json(data), update_modified=False
+	)
+
+	status = frappe.db.get_value("OneRC Payment Transaction", transaction.name, "status", for_update=True)
+	transaction.reload()
+	receipt = parsed.get("receipt")
+
+	if receipt and transaction.gateway_receipt == receipt:
+		# The callback or a person got there first, with the same code.
+		frappe.db.commit()
+		return accepted
+
+	problem = None
+	if not receipt:
+		problem = (
+			f"Safaricom did not return a completed transaction for {transaction.name}: "
+			f"{parsed.get('result_description') or 'no detail'}."
+		)
+	elif status != "Completed" or transaction.gateway_receipt:
+		problem = (
+			f"{transaction.name} is {status} with receipt {transaction.gateway_receipt or 'none'}; "
+			f"the lookup returned {receipt}, which was not applied."
+		)
+	elif parsed.get("amount") is not None and _amount(parsed["amount"]) != _amount(transaction.amount):
+		problem = (
+			f"The lookup for {transaction.name} returned {receipt} for {parsed['amount']}, but the "
+			f"payment was for {transaction.amount}. The receipt was not applied."
+		)
+	elif _receipt_used_by(receipt, transaction.name):
+		problem = f"The lookup for {transaction.name} returned {receipt}, which another transaction already carries."
+
+	if problem:
+		frappe.log_error(title="M-Pesa receipt lookup not applied", message=problem)
+		frappe.db.commit()
+		return accepted
+
+	_store_receipt(transaction, receipt, parsed.get("transaction_date"))
+	frappe.db.set_value(
+		"Mpesa Payment",
+		detail.name,
+		{
+			"mpesa_receipt_number": receipt,
+			"receipt_source": "Status Query",
+			"transaction_date": parsed.get("transaction_date"),
+		},
+		update_modified=False,
+	)
+	frappe.db.commit()
+
+	_notify_source_receipt(transaction, receipt)
+	return accepted
+
+
+def _amount(value):
+	try:
+		return round(float(value), 2)
+	except (TypeError, ValueError):
+		return None
 
 
 def _notify_source_receipt(transaction, receipt):
