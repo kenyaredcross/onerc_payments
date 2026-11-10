@@ -254,6 +254,7 @@ app_license = "mit"
 scheduler_events = {
 	"hourly": [
 		"onerc_payments.tasks.poll_pending_transactions",
+		"onerc_payments.tasks.request_missing_receipts",
 	],
 }
 

@@ -17,6 +17,14 @@ frappe.ui.form.on("Mpesa Payment", {
 			);
 		}
 
+		// Completed but no receipt: the callback was lost. Offer the same recovery
+		// as the transaction form, against the linked transaction.
+		if (frm.doc.status === "Completed" && !frm.doc.mpesa_receipt_number && frm.doc.payment_transaction) {
+			frm.add_custom_button(__("Open payment to add receipt"), () =>
+				frappe.set_route("Form", "OneRC Payment Transaction", frm.doc.payment_transaction),
+			);
+		}
+
 		// For a payment that hasn't been confirmed yet (usually because the STK
 		// callback never reached us), let an admin re-query Safaricom and sync the
 		// record straight from the form.

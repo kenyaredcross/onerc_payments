@@ -11,6 +11,7 @@ https://developer.safaricom.co.ke/Documentation
 
 import base64
 import ipaddress
+import re
 from datetime import datetime
 
 import frappe
@@ -47,6 +48,9 @@ TERMINAL_STK_FAILURE_CODES = frozenset([
 # Reference: https://developer.safaricom.co.ke/Documentation
 # Operators can extend this via frappe.conf.mpesa_extra_allowed_ips
 # (comma-separated string or list, supports CIDR) for staging proxies.
+# An M-Pesa receipt number: ten capital letters and digits, e.g. TKB1A2C3D4.
+MPESA_RECEIPT_PATTERN = re.compile(r"^[A-Z0-9]{10}$")
+
 SAFARICOM_PRODUCTION_IPS = frozenset([
 	"196.201.212.69",
 	"196.201.212.74",
@@ -154,6 +158,16 @@ class MpesaDarajaGateway(BaseGateway):
 		succeeds and the status poll still marks it Completed. That failure is silent,
 		so refuse to push at all rather than take a payment we can never receipt.
 		"""
+		return (
+			f"{self._public_base()}/api/method/onerc_payments.api.v1.payment"
+			f".payment_callback?gateway_name=Mpesa+Daraja"
+		)
+
+	def _receipt_result_url(self):
+		"""Where Daraja posts the answer to a Transaction Status query."""
+		return f"{self._public_base()}/api/method/onerc_payments.api.v1.payment.receipt_query_result"
+
+	def _public_base(self):
 		base = (self.settings.mpesa_callback_base_url or "").strip().rstrip("/")
 		if not base:
 			base = (frappe.utils.get_url() or "").strip().rstrip("/")
@@ -163,10 +177,7 @@ class MpesaDarajaGateway(BaseGateway):
 				f"{base or '(no callback URL)'}. Set OneRC Payment Settings > "
 				"M-Pesa Callback Base URL to a public https address for this site."
 			)
-		return (
-			f"{base}/api/method/onerc_payments.api.v1.payment"
-			f".payment_callback?gateway_name=Mpesa+Daraja"
-		)
+		return base
 
 	@staticmethod
 	def _redacted(payload):
@@ -464,6 +475,7 @@ class MpesaDarajaGateway(BaseGateway):
 			"result_code": str(result_code) if result_code is not None else None,
 			"result_description": callback.get("ResultDesc"),
 			"mpesa_receipt_number": meta.get("MpesaReceiptNumber"),
+			"receipt_source": "Callback" if meta.get("MpesaReceiptNumber") else None,
 			"amount": paid,
 			"expected_amount": expected,
 			"amount_matched": amount_matched,
@@ -572,6 +584,158 @@ class MpesaDarajaGateway(BaseGateway):
 			f"Date:        {transaction.transaction_date}\n"
 			f"Reference:   {transaction.name}\n"
 		)
+
+	# ── RECEIPT RECOVERY ─────────────────────────────────────────────
+	#
+	# The M-Pesa code reaches us on the STK callback and nowhere else: the STK
+	# query that the status poll uses says "paid" but carries no code. When the
+	# callback is lost (callback URL unreachable, proxy rejects it, Safaricom gives
+	# up retrying) the payment is Completed and the code is blank for good. Two ways
+	# back: staff type the code from the payer's SMS, or we ask Daraja's
+	# Transaction Status API, which can find a transaction by the request's
+	# conversation ID when the receipt is the thing we do not have.
+
+	accepts_entered_receipt = True
+
+	def normalise_receipt(self, value):
+		"""An M-Pesa code is ten letters and digits, e.g. TKB1A2C3D4. Upper-cased,
+		with spaces removed, because staff copy it from an SMS by hand."""
+		code = "".join(str(value or "").split()).upper()
+		if not MPESA_RECEIPT_PATTERN.match(code):
+			frappe.throw(
+				f"{value or 'That'} is not an M-Pesa code. An M-Pesa code is 10 letters "
+				"and numbers, like TKB1A2C3D4, at the start of the payer's M-Pesa message."
+			)
+		return code
+
+	def record_entered_receipt(self, transaction, receipt):
+		checkout_id = transaction.gateway_reference
+		if not checkout_id:
+			return None
+		values = {
+			"payment_transaction": transaction.name,
+			"mpesa_receipt_number": receipt,
+			"receipt_source": "Entered by Staff",
+		}
+		return self._upsert_mpesa_payment(checkout_id, values).name
+
+	def _initiator(self):
+		name = (self.settings.get("mpesa_initiator_name") or "").strip()
+		credential = get_decrypted_password(
+			"OneRC Payment Settings",
+			"OneRC Payment Settings",
+			"mpesa_security_credential",
+			raise_exception=False,
+		)
+		return name, credential
+
+	def can_request_receipt(self):
+		name, credential = self._initiator()
+		return bool(name and credential)
+
+	def request_receipt(self, transaction):
+		"""Ask Daraja's Transaction Status API for the code of a completed STK push.
+
+		Asynchronous: Daraja acknowledges here and posts the result to
+		``receipt_query_result``, which matches it back by the ConversationID we
+		store now. That ID is issued by Safaricom and returned only to us, so it is
+		what makes the unauthenticated result endpoint safe to trust.
+
+		The STK push's MerchantRequestID is sent as OriginalConversationID: Daraja
+		finds a transaction by its receipt number or by the originator conversation
+		ID of the request that started it, and for an STK push that request ID is
+		the MerchantRequestID.
+		"""
+		name, credential = self._initiator()
+		if not (name and credential):
+			frappe.throw(
+				"M-Pesa lookups need the Initiator Name and Security Credential in "
+				"OneRC Payment Settings."
+			)
+
+		detail = frappe.db.get_value(
+			"Mpesa Payment",
+			{"checkout_request_id": transaction.gateway_reference},
+			["name", "merchant_request_id"],
+			as_dict=True,
+		) if transaction.gateway_reference else None
+		if not detail or not detail.merchant_request_id:
+			frappe.throw(
+				f"{transaction.name} has no M-Pesa request ID to look up, so Safaricom "
+				"cannot find it. Enter the code from the payer's message instead."
+			)
+
+		result_url = self._receipt_result_url()
+		payload = {
+			"Initiator": name,
+			"SecurityCredential": credential,
+			"CommandID": "TransactionStatusQuery",
+			"OriginalConversationID": detail.merchant_request_id,
+			"PartyA": self.settings.mpesa_shortcode,
+			"IdentifierType": "4",
+			"ResultURL": result_url,
+			"QueueTimeOutURL": result_url,
+			"Remarks": f"Receipt for {transaction.name}"[:100],
+			"Occasion": transaction.name,
+		}
+
+		try:
+			response = requests.post(
+				f"{self._base_url()}/mpesa/transactionstatus/v1/query",
+				json=payload,
+				headers={"Authorization": f"Bearer {self._get_token()}"},
+				timeout=30,
+			)
+			data = response.json()
+		except Exception as e:
+			frappe.logger().error(f"Daraja transaction status request failed for {transaction.name}: {e}")
+			frappe.throw("Safaricom could not be reached. Try again in a few minutes.")
+
+		if str(data.get("ResponseCode")) != "0" or not data.get("ConversationID"):
+			frappe.throw(
+				"Safaricom refused the lookup: "
+				f"{data.get('ResponseDescription') or data.get('errorMessage') or 'no reason given'}."
+			)
+
+		self._upsert_mpesa_payment(
+			transaction.gateway_reference,
+			{
+				"status_query_conversation_id": data.get("ConversationID"),
+				"status_query_requested_on": frappe.utils.now_datetime(),
+			},
+		)
+		return {"conversation_id": data.get("ConversationID")}
+
+	@staticmethod
+	def parse_receipt_result(data):
+		"""Read a Transaction Status result (or queue timeout) posted by Daraja.
+
+		Returns the ConversationID it answers, its ResultCode, and - when the
+		transaction was found and completed - the receipt, amount and finalised
+		time. ResultParameter is a list, or a single object when there is one.
+		"""
+		result = (data or {}).get("Result") or {}
+		params = ((result.get("ResultParameters") or {}).get("ResultParameter")) or []
+		if isinstance(params, dict):
+			params = [params]
+		values = {p.get("Key"): p.get("Value") for p in params if isinstance(p, dict)}
+
+		result_code = _as_int(result.get("ResultCode"))
+		status = str(values.get("TransactionStatus") or "")
+		receipt = values.get("ReceiptNo")
+		completed = result_code == 0 and status.lower() == "completed" and bool(receipt)
+
+		return {
+			"conversation_id": result.get("ConversationID"),
+			"result_code": str(result.get("ResultCode")) if result.get("ResultCode") is not None else None,
+			"result_description": result.get("ResultDesc"),
+			"completed": completed,
+			"receipt": str(receipt).strip().upper() if completed else None,
+			"amount": values.get("Amount"),
+			"transaction_date": MpesaDarajaGateway._parse_mpesa_date(
+				values.get("FinalisedTime") or values.get("InitiatedTime")
+			),
+		}
 
 	# ── OUTBOUND — B2C ───────────────────────────────────────────────
 

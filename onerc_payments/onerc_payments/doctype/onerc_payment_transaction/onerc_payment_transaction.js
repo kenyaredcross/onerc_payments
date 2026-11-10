@@ -26,6 +26,10 @@
 
 frappe.ui.form.on("OneRC Payment Transaction", {
 	refresh(frm) {
+		if (!frm.is_new() && frm.doc.status === "Completed" && !frm.doc.gateway_receipt) {
+			offer_receipt_recovery(frm, frm.doc.name);
+		}
+
 		if (frm.is_new() || frm.doc.status !== "Pending" || !frm.doc.gateway) {
 			return;
 		}
@@ -98,6 +102,111 @@ function confirm(frm) {
 					frm.reload_doc();
 				})
 				.always(() => frappe.dom.unfreeze());
+		},
+	});
+
+	dialog.show();
+}
+
+/**
+ * A completed payment with no receipt: the gateway's callback never reached us.
+ *
+ * Two ways to fill the blank, each offered only when the server says the
+ * gateway supports it: type the code from the payer's message, or ask the
+ * gateway to look it up (the answer comes back on its own a little later).
+ * The server checks permission, status and that the code is not already used
+ * on another payment; nothing here is the authorisation.
+ */
+function offer_receipt_recovery(frm, transaction_name) {
+	frappe
+		.call({
+			method: "onerc_payments.api.v1.payment.receipt_options",
+			args: { transaction_name },
+		})
+		.then((r) => {
+			const options = r?.message || {};
+			if (!options.missing) {
+				return;
+			}
+
+			frm.dashboard.set_headline(
+				__("This payment went through, but its receipt number never arrived."),
+				"orange",
+			);
+
+			const group = __("Receipt");
+
+			if (options.can_request) {
+				frm.add_custom_button(
+					__("Look up with gateway"),
+					() => {
+						frappe
+							.call({
+								method: "onerc_payments.api.v1.payment.request_gateway_receipt",
+								args: { transaction_name },
+								freeze: true,
+								freeze_message: __("Asking the gateway…"),
+							})
+							.then(() => {
+								frappe.show_alert(
+									{
+										message: __(
+											"Lookup sent. The receipt usually arrives within a minute; reload to see it.",
+										),
+										indicator: "blue",
+									},
+									8,
+								);
+								frm.reload_doc();
+							});
+					},
+					group,
+				);
+			}
+
+			if (options.can_enter) {
+				frm.add_custom_button(
+					__("Enter from payer's message"),
+					() => enter_receipt(frm, transaction_name),
+					group,
+				);
+			}
+		});
+}
+
+function enter_receipt(frm, transaction_name) {
+	const dialog = new frappe.ui.Dialog({
+		title: __("Enter receipt number"),
+		fields: [
+			{
+				fieldtype: "HTML",
+				options: `<p class="text-muted small">${__(
+					"Copy the code at the start of the payer's confirmation message, for example TKB1A2C3D4. Check the amount in the message matches this payment.",
+				)}</p>`,
+			},
+			{
+				fieldname: "receipt",
+				fieldtype: "Data",
+				label: __("Receipt number"),
+				reqd: 1,
+			},
+		],
+		primary_action_label: __("Save receipt"),
+		primary_action(values) {
+			frappe
+				.call({
+					method: "onerc_payments.api.v1.payment.record_gateway_receipt",
+					args: { transaction_name, receipt: values.receipt },
+					freeze: true,
+				})
+				.then((r) => {
+					dialog.hide();
+					frappe.show_alert(
+						{ message: __("Receipt {0} saved.", [r.message.receipt]), indicator: "green" },
+						5,
+					);
+					frm.reload_doc();
+				});
 		},
 	});
 

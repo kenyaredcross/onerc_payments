@@ -76,6 +76,38 @@ class BaseGateway(ABC):
 		"""
 		return None
 
+	# ── RECEIPT RECOVERY ─────────────────────────────────────────────
+	# For a payment that was confirmed but whose receipt never arrived (a lost
+	# callback). Both paths are optional; a driver that has no use for them keeps
+	# the defaults and the desk offers nothing.
+
+	# True when staff may type this gateway's receipt in by hand.
+	accepts_entered_receipt = False
+
+	def normalise_receipt(self, value):
+		"""Return a receipt typed in by staff in the gateway's canonical form, or
+		raise ``frappe.ValidationError`` if it cannot be one. Default: refuse, so a
+		driver must opt in before staff can type receipts against it."""
+		import frappe
+
+		frappe.throw("This payment method does not take a receipt typed in by staff.")
+
+	def record_entered_receipt(self, transaction, receipt):
+		"""Note on the per-gateway detail record that staff entered ``receipt``.
+		Default: nothing to note."""
+		return None
+
+	def can_request_receipt(self):
+		"""True when ``request_receipt`` is configured and may be called."""
+		return False
+
+	def request_receipt(self, transaction):
+		"""Ask the gateway for the receipt of a completed payment. The answer may
+		arrive later, on a result URL. Default: unsupported."""
+		import frappe
+
+		frappe.throw("This payment method cannot look up a receipt.")
+
 	@abstractmethod
 	def initiate(self, transaction):
 		"""
