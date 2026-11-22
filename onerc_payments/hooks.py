@@ -85,7 +85,9 @@ app_license = "mit"
 # Installation
 # ------------
 
-# before_install = "onerc_payments.install.before_install"
+# Stops the install on a site where another app owns "OneRC Payment Settings" in another
+# case (onerc_fundraising's "ONERC Payment Settings"): MariaDB would hand us its values.
+before_install = "onerc_payments.install.before_install"
 # after_install = "onerc_payments.install.after_install"
 
 # Uninstallation

@@ -11,7 +11,6 @@ Nothing else. The gateway, credentials, and flow are handled here.
 import json
 
 import frappe
-from frappe.rate_limiter import rate_limit
 from frappe.utils import add_to_date, cint, flt, now_datetime
 
 from onerc_payments.gateways import get_gateway
@@ -32,6 +31,10 @@ RECOVERABLE_STATUSES = ("Failed", "Cancelled")
 # Safaricom rate-limits the query. So the gateway is asked at most once per interval per
 # payment; in between, the answer is our own record. The first poll always asks.
 STATUS_QUERY_INTERVAL_SECONDS = 15
+
+# Status checks allowed per IP per window, across every app's polling endpoint.
+STATUS_POLL_LIMIT = 60
+STATUS_POLL_WINDOW_SECONDS = 60
 
 # A second request for the same thing, to the same phone, for the same amount, this soon
 # after the first, is a double click or a second tab: it gets the first prompt back
@@ -126,6 +129,7 @@ def initiate_payment(
 	metadata=None,
 	gateway=None,
 	return_url=None,
+	account_reference=None,
 ):
 	"""
 	Initiate a payment. Called by any OneRC app, from its own server code.
@@ -144,6 +148,12 @@ def initiate_payment(
 
 	`return_url` (card checkouts): a path on this site the payer is sent back to after
 	paying, e.g. "/donate/thank-you". Without it the checkout page closes its window.
+
+	`account_reference` (inbound only): the account number the payer sees, chosen by the app
+	(e.g. an appeal code). Only its ASCII letters and digits are kept, cut to 12 ("GEN-FUND"
+	becomes "GENFUND"); if nothing is left, or it is omitted, the usual running reference is
+	allocated. Payments are still matched by the gateway's own IDs, never by this reference,
+	so many payments may share one. Ignored for outbound payments.
 
 	Returns:
 	{
@@ -205,9 +215,14 @@ def initiate_payment(
 		}
 	)
 	if direction == "Inbound":
-		from onerc_payments.references import next_reference
+		from onerc_payments.references import clean_account_reference, next_reference, reference_settings
 
-		reference, description = next_reference(source_app, settings)
+		reference = clean_account_reference(account_reference)
+		if reference:
+			# The app's own reference: no running number is used up for it.
+			_prefix, description = reference_settings(source_app, settings)
+		else:
+			reference, description = next_reference(source_app, settings)
 		transaction.account_reference = reference
 		transaction.flags.reference_description = description
 	transaction.flags.return_url = return_url
@@ -304,7 +319,30 @@ def _status_reply(transaction):
 		"status": transaction.status,
 		"gateway_receipt": transaction.gateway_receipt,
 		"failure_reason": transaction.failure_reason,
+		"failure_code": _failure_code(transaction),
 	}
+
+
+def _failure_code(transaction):
+	"""The provider's result code for a Failed/Cancelled payment (M-Pesa "1032": cancelled on
+	the phone), as text; None when unknown. Asks nothing for any other status, and never
+	raises: this reply is what the payer's page polls.
+
+	Read through the driver that collected the payment, from its own detail record."""
+	if transaction.status not in RECOVERABLE_STATUSES:
+		return None
+	messages = len(getattr(frappe.local, "message_log", None) or [])
+	try:
+		code = get_gateway(transaction.gateway, allow_inactive=True).failure_code(transaction)
+		return str(code) if code is not None and str(code) else None
+	except Exception as e:
+		try:
+			# A throw has already queued its message for the response; it is not the page's error.
+			frappe.local.message_log = (getattr(frappe.local, "message_log", None) or [])[:messages]
+			frappe.logger().error(f"onerc_payments: failure code of {transaction.name} not read: {e}")
+		except Exception:
+			pass
+		return None
 
 
 def _status_query_key(transaction):
@@ -323,19 +361,48 @@ def _due_for_gateway_query(transaction):
 	return True
 
 
+def _limit_status_polls():
+	"""Refuse more than STATUS_POLL_LIMIT status checks per endpoint and IP per window.
+
+	Counted under our own key. Frappe's ``rate_limit`` keys its counter by the request's
+	method name + IP + window, not by the function it decorates, so the decorator this
+	replaced shared the counter of the calling app's own rate-limited endpoint and counted
+	every poll twice there (a 30-a-minute endpoint allowed 15). Per endpoint, as that
+	decorator was, so two endpoints of one app keep a budget each.
+
+	Only inside a web request with a known IP: the scheduler, bench execute and tests
+	without a request are never limited.
+	"""
+	ip = getattr(frappe.local, "request_ip", None)
+	if not ip or not getattr(frappe.local, "request", None):
+		return
+	cache = frappe.cache
+	endpoint = frappe.form_dict.get("cmd") or ""
+	key = cache.make_key(f"onerc_payments:status_poll:{endpoint}:{ip}")
+	count = cache.incrby(key, 1)
+	if count == 1 or cache.ttl(key) < 0:
+		# The second test heals a counter whose expiry was lost between the two calls.
+		cache.expire(key, STATUS_POLL_WINDOW_SECONDS)
+	if count > STATUS_POLL_LIMIT:
+		frappe.throw(
+			frappe._("You hit the rate limit because of too many requests. Please try after sometime."),
+			frappe.RateLimitExceededError,
+		)
+
+
 # Not whitelisted, for the same reason as initiate_payment: over HTTP it told any logged-in
 # user the status and receipt of any payment. Apps poll through their own endpoints, which
 # check that the caller owns the document.
-@rate_limit(limit=60, seconds=60)
 def check_payment_status(transaction_id):
 	"""
 	Check the current status of a payment.
-	Called by the apps' own polling endpoints (rate-limited per IP).
+	Called by the apps' own polling endpoints; limited per IP (``_limit_status_polls``).
 
 	A decided payment is answered from our own record. A Pending one is checked with
 	the gateway at most every STATUS_QUERY_INTERVAL_SECONDS (see the constants above);
 	in between, the callback has usually already updated our record.
 	"""
+	_limit_status_polls()
 	transaction = frappe.get_doc(TRANSACTION, transaction_id)
 	if transaction.status != "Pending" or not _due_for_gateway_query(transaction):
 		return _status_reply(transaction)
@@ -629,8 +696,12 @@ def _driver_for_kind(kind):
 
 def _callback_reference(kind, gateway_name, data):
 	if kind == "Payment":
-		return _extract_gateway_reference(gateway_name, data)
-	return _driver_for_kind(kind).callback_reference(data)
+		reference = _extract_gateway_reference(gateway_name, data)
+	else:
+		reference = _driver_for_kind(kind).callback_reference(data)
+	# Anyone can post here, as JSON, and the reference becomes a query filter: only a plain
+	# string may (a list such as ["like", "ws_CO_%"] would match whichever payment came first).
+	return reference if isinstance(reference, str) else None
 
 
 def _find_transaction(kind, reference):

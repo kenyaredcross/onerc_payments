@@ -30,6 +30,7 @@ REFERENCE_MAX = 12
 DESCRIPTION_MAX = 13
 
 _NOT_ALNUM = re.compile(r"[^A-Z0-9]")
+_NOT_ASCII_ALNUM = re.compile(r"[^A-Za-z0-9]")
 _NOT_DESCRIPTION = re.compile(r"[^A-Za-z0-9 ]")
 
 
@@ -50,6 +51,14 @@ def clean_description(value):
 	"""Letters, digits and spaces only, cut to DESCRIPTION_MAX. Blank stays blank."""
 	text = " ".join(_NOT_DESCRIPTION.sub(" ", value or "").split())
 	return text[:DESCRIPTION_MAX].strip() or None
+
+
+def clean_account_reference(value):
+	"""An account reference the calling app gives: its ASCII letters and digits only, cut to
+	REFERENCE_MAX ("GEN-FUND" -> "GENFUND"). None when nothing is left."""
+	if value is None:
+		return None
+	return _NOT_ASCII_ALNUM.sub("", str(value))[:REFERENCE_MAX] or None
 
 
 def _from_hooks(hook, source_app):

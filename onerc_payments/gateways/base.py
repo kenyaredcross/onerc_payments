@@ -149,6 +149,17 @@ class BaseGateway(ABC):
 		"""
 		return None
 
+	def failure_code(self, transaction):
+		"""The provider's result code for a payment that ended Failed or Cancelled (M-Pesa
+		"1032": cancelled on the phone), as text, or None when it is not known.
+
+		Called only for Failed/Cancelled payments, to add ``failure_code`` to the status reply.
+		Read it from what is already stored (the detail record); never ask the gateway.
+
+		Default: None.
+		"""
+		return None
+
 	def match_unconfirmed(self, data, gateway_names):
 		"""Find the payment a callback belongs to when its reference matches nothing.
 

@@ -36,7 +36,7 @@ from frappe.utils import add_to_date, cint, flt, now_datetime
 
 from .accounts import public_base, require_https, sign_in_request, token_cache_key
 from .base import MANUAL_CHECK, BaseGateway
-from .mpesa_daraja import MPESA_RECEIPT_PATTERN, _as_int, charged_amount
+from .mpesa_daraja import MPESA_RECEIPT_PATTERN, _as_int, charged_amount, failure_code_text
 
 ACCOUNT = "KCB Buni Account"
 DRIVER = "onerc_payments.gateways.kcb_buni.KcbBuniGateway"
@@ -96,7 +96,12 @@ def _metadata(stk):
 	items = (stk.get("CallbackMetadata") or {}).get("Item") or []
 	if isinstance(items, dict):
 		items = [items]
-	return {item.get("Name"): item.get("Value") for item in items if isinstance(item, dict)}
+	# Plain values only: the receipt reaches queries, and anyone can post a callback.
+	return {
+		item.get("Name"): item.get("Value")
+		for item in items
+		if isinstance(item, dict) and isinstance(item.get("Value"), str | int | float)
+	}
 
 
 def _phone_text(value):
@@ -617,6 +622,12 @@ class KcbBuniGateway(BaseGateway):
 
 	def record_status_update(self, transaction, result):
 		return self._upsert(transaction, {"status": result.get("status")})
+
+	def failure_code(self, transaction):
+		"""The ResultCode of the callback that failed the payment (e.g. "1032"), if one did."""
+		return failure_code_text(
+			frappe.db.get_value(DETAIL, {"payment_transaction": transaction.name}, "result_code")
+		)
 
 	# ── receipts ─────────────────────────────────────────────────────
 

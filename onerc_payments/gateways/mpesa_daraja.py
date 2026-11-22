@@ -115,6 +115,17 @@ def _as_int(value, default=-1):
 		return default
 
 
+def failure_code_text(value):
+	"""A result code stored on a detail record, as the status reply gives it: text, or None.
+
+	Stored as text whichever way it came (an int on the callback, a string on the query).
+	"0" is success, not a failure's code: on a failed payment it means a later "paid" message
+	overwrote the record, so the failure's own code is no longer known.
+	"""
+	code = str(value).strip() if value is not None else ""
+	return code if code and code != "0" else None
+
+
 def charged_amount(amount):
 	"""The whole-shilling amount M-Pesa is asked for.
 
@@ -650,6 +661,17 @@ class MpesaDarajaGateway(BaseGateway):
 		}
 		return self._upsert_mpesa_payment(checkout_id, values).name
 
+	def failure_code(self, transaction):
+		"""The STK ResultCode of a failed payment (e.g. "1032"), from its Mpesa Payment record:
+		written by the callback and by the status query alike."""
+		if transaction.get("gateway_detail_doctype") == "Mpesa Payment" and transaction.get("gateway_detail"):
+			record = transaction.gateway_detail
+		elif transaction.get("gateway_reference"):
+			record = {"checkout_request_id": transaction.gateway_reference}
+		else:
+			return None
+		return failure_code_text(frappe.db.get_value("Mpesa Payment", record, "result_code"))
+
 	def record_initiation_details(self, transaction, result):
 		"""Open the ``Mpesa Payment`` detail record at STK initiation.
 
@@ -715,7 +737,12 @@ class MpesaDarajaGateway(BaseGateway):
 		items = (callback.get("CallbackMetadata") or {}).get("Item") or []
 		if isinstance(items, dict):
 			items = [items]
-		return {item.get("Name"): item.get("Value") for item in items if isinstance(item, dict)}
+		# Plain values only: the receipt and phone reach queries, and anyone can post a callback.
+		return {
+			item.get("Name"): item.get("Value")
+			for item in items
+			if isinstance(item, dict) and isinstance(item.get("Value"), str | int | float)
+		}
 
 	# ── CONFIRMING A "PAID" CALLBACK ─────────────────────────────────
 	#

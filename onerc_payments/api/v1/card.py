@@ -128,7 +128,8 @@ def checkout(ref=None):
 			return _message("Payment not found", "This payment is not a card payment.", 404)
 		action, fields = driver.checkout_form(transaction)
 	except Exception:
-		frappe.log_error(title=f"Card checkout could not be opened for {transaction.name}")
+		# Deferred: this is a GET request, and Frappe rolls those back at the end.
+		frappe.log_error(title=f"Card checkout could not be opened for {transaction.name}", defer_insert=True)
 		return _message(
 			"Card payment unavailable",
 			"We could not open the card payment page. Close this window and try again, or pay another way.",
