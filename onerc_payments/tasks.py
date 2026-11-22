@@ -35,14 +35,20 @@ RETRY_TIME_BUDGET_SECONDS = 150
 
 
 def _automatic_gateways():
-	"""Active gateways whose driver resolves payments by itself (not by a person)."""
+	"""Gateways whose driver resolves payments by itself (not by a person)."""
 	from onerc_payments.gateways import get_gateway
 
 	names = []
-	for name in frappe.get_all("OneRC Payment Gateway", filters={"is_active": 1}, pluck="name"):
+	# Switched-off accounts too: a till closed after an appeal still has payments to settle.
+	# The original gateways keep exactly the behaviour they had (active only).
+	from onerc_payments.gateways import gateway_rows
+
+	for row in gateway_rows("is_active"):
+		if not (row.is_active or row.account):
+			continue
 		try:
-			if get_gateway(name).resolves_automatically:
-				names.append(name)
+			if get_gateway(row.name, allow_inactive=True).resolves_automatically:
+				names.append(row.name)
 		except Exception:
 			continue
 	return names
@@ -211,13 +217,13 @@ def retry_failed_callbacks(deadline=None):
 
 def retry_unmatched_callbacks(deadline=None):
 	"""Payment callbacks that matched nothing, looked for again for half an hour."""
-	from onerc_payments.api.v1.payment import CALLBACK_LOG
+	from onerc_payments.api.v1.payment import CALLBACK_LOG, PAYMENT_KINDS
 
 	recent = frappe.get_all(
 		CALLBACK_LOG,
 		filters={
 			"status": "Unmatched",
-			"kind": "Payment",
+			"kind": ["in", list(PAYMENT_KINDS)],
 			"received_on": [">=", add_to_date(now_datetime(), minutes=-UNMATCHED_RETRY_MINUTES)],
 		},
 		pluck="name",
@@ -278,7 +284,7 @@ def request_missing_receipts():
 	for row in rows:
 		if row.gateway not in drivers:
 			try:
-				driver = get_gateway(row.gateway)
+				driver = get_gateway(row.gateway, allow_inactive=True)
 				drivers[row.gateway] = driver if driver.can_request_receipt() else None
 			except Exception:
 				drivers[row.gateway] = None

@@ -262,7 +262,7 @@ class TestReceiptRecovery(FrappeTestCase):
 
 	def _fire(self, payload):
 		frappe.local.request = frappe._dict(data=json.dumps(payload).encode())
-		frappe.form_dict = frappe._dict()
+		frappe.local.form_dict = frappe._dict()
 		with patch.object(pay, "_notify_source_receipt") as notify:
 			response = pay.receipt_query_result()
 		return response, notify

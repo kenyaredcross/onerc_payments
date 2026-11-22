@@ -12,6 +12,10 @@
   "is_active",
   "supports_inbound",
   "supports_outbound",
+  "account_section",
+  "account_doctype",
+  "column_break_account",
+  "account",
   "details_section",
   "driver_class",
   "supported_countries",
@@ -86,6 +90,31 @@
    "fieldtype": "Code",
    "label": "Config Schema",
    "options": "JSON"
+  },
+  {
+   "fieldname": "account_section",
+   "fieldtype": "Section Break",
+   "label": "Account",
+   "depends_on": "eval:doc.account"
+  },
+  {
+   "fieldname": "account_doctype",
+   "fieldtype": "Link",
+   "label": "Account Type",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_account",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "account",
+   "fieldtype": "Dynamic Link",
+   "label": "Account",
+   "options": "account_doctype",
+   "read_only": 1,
+   "description": "This gateway is one account of its driver (a KCB till, a card merchant). Its credentials are kept on the account."
   }
  ],
  "grid_page_length": 50,
@@ -93,7 +122,7 @@
  "links": [],
  "search_fields": "gateway_name,label",
  "title_field": "gateway_name",
- "modified": "2026-05-31 03:43:34.659689",
+ "modified": "2026-11-22 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Onerc Payments",
  "name": "OneRC Payment Gateway",

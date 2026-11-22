@@ -15,7 +15,7 @@ from frappe.rate_limiter import rate_limit
 from frappe.utils import add_to_date, cint, flt, now_datetime
 
 from onerc_payments.gateways import get_gateway
-from onerc_payments.gateways.base import CONFIRMED, CONTRADICTED, UNAVAILABLE
+from onerc_payments.gateways.base import CONFIRMED, CONTRADICTED, MANUAL_CHECK, UNAVAILABLE
 
 TRANSACTION = "OneRC Payment Transaction"
 CALLBACK_LOG = "OneRC Payment Callback"
@@ -91,7 +91,25 @@ def _settings_value(fieldname, default=None):
 # ── STARTING A PAYMENT ─────────────────────────────────────────────────────
 
 
-@frappe.whitelist()
+def _same_site_path(value):
+	"""A return address the payer may be sent back to: a path on this site, nothing else.
+
+	A full URL is refused: the address is chosen by the calling app, often from a form,
+	and sending payers to another site after they pay is how phishing pages get traffic.
+	"""
+	value = (value or "").strip()
+	if not value:
+		return None
+	if not value.startswith("/") or value.startswith("//") or value.startswith("/\\") or "\\" in value:
+		frappe.throw("The return address must be a path on this site, starting with /.")
+	if any(ord(ch) < 32 for ch in value) or len(value) > 500:
+		frappe.throw("The return address is not a valid path.")
+	return value
+
+
+# Not whitelisted: only an app's own server code starts a payment. Over HTTP any logged-in
+# user could start one for any document and point it at any account. No browser code calls
+# this (checked 2026-11-22 across every bench); apps call it from their own endpoints.
 def initiate_payment(
 	amount,
 	currency,
@@ -107,47 +125,52 @@ def initiate_payment(
 	recipient_account=None,
 	metadata=None,
 	gateway=None,
+	return_url=None,
 ):
 	"""
-	Initiate a payment. Called by any OneRC app.
+	Initiate a payment. Called by any OneRC app, from its own server code.
 
-	`gateway` names which gateway to collect through. Omitted, the one set as
-	active in OneRC Payment Settings is used, so every existing caller behaves
-	exactly as it did. It exists because a site may keep several gateways live
-	at once and let the payer pick: an organisation taking both M-Pesa and bank
-	transfer offers both, and a single site-wide setting can only answer for one
-	of them — which meant a payer with no mobile money account had no way to say
-	so. A named gateway that is not active is refused; see `get_gateway`.
+	`gateway` names which gateway (or account: a KCB till, a card merchant) to collect
+	through. Omitted, the gateway set as active in Settings is used, so every existing
+	caller behaves exactly as it did. It exists because a site may keep several gateways
+	live at once: M-Pesa and bank transfer side by side, or one KCB till per county - the
+	app decides which (e.g. by the member's county). A named gateway that is not active is
+	refused; see `get_gateway`.
 
 	A currency the gateway cannot collect is refused before anything is written:
 	M-Pesa takes KES only, and used to send any other currency's amount as that many
 	shillings. An inbound payment gets an account reference (see
 	``onerc_payments.references``), which is what the payer sees as the account number.
 
+	`return_url` (card checkouts): a path on this site the payer is sent back to after
+	paying, e.g. "/donate/thank-you". Without it the checkout page closes its window.
+
 	Returns:
 	{
 	    "transaction_id": "PAY-2026-00001",
 	    "status": "Pending",
-	    "gateway_reference": "...",
+	    "gateway_reference": "...",   # M-Pesa: CheckoutRequestID; KCB: TILL-REFERENCE; card: order ref
 	    "message": "Check your phone and enter your M-Pesa PIN",
+	    "checkout_url": "...",        # card payments only: send the payer here
 	}
 	"""
 	settings = frappe.get_single("OneRC Payment Settings")
 
 	# Resolved before the transaction is written, so a bad gateway name is
 	# refused without leaving an Initiated row nobody will ever resolve.
-	driver = get_gateway(gateway)
 	gateway_name = (gateway or "").strip() or settings.active_gateway
+	driver = get_gateway(gateway_name)
 
 	currency = (currency or settings.default_currency or "KES").strip().upper()
 	driver.check_currency(currency)
+	return_url = _same_site_path(return_url)
 
 	phone = normalize_phone(payer_phone)
 
-	if direction == "Inbound" and driver.prompts_payer:
+	if direction == "Inbound" and (driver.prompts_payer or driver.opens_checkout):
 		earlier = _recent_prompt(gateway_name, source_doctype, source_document, phone, amount)
 		if earlier:
-			return {
+			reply = {
 				"transaction_id": earlier.name,
 				"status": earlier.status,
 				"gateway_reference": earlier.gateway_reference,
@@ -156,6 +179,10 @@ def initiate_payment(
 					"Complete that prompt, or wait two minutes and try again."
 				),
 			}
+			if driver.opens_checkout:
+				reply["checkout_url"] = driver.checkout_url(earlier)
+				reply["message"] = "This payment was started moments ago: continue on its card page."
+			return reply
 
 	transaction = frappe.get_doc(
 		{
@@ -183,6 +210,7 @@ def initiate_payment(
 		reference, description = next_reference(source_app, settings)
 		transaction.account_reference = reference
 		transaction.flags.reference_description = description
+	transaction.flags.return_url = return_url
 	transaction.insert(ignore_permissions=True)
 
 	result = driver.initiate(transaction)
@@ -207,15 +235,27 @@ def initiate_payment(
 		frappe.logger().error(
 			f"onerc_payments: failed to record initiation details for {transaction.name}: {e}"
 		)
+		if driver.detail_is_required and transaction.status == "Pending":
+			# Its callback is matched through the detail record alone, so as things stand it
+			# could never be settled. A prompt may already be on the payer's phone: marked
+			# unconfirmed, a callback for it still reaches a person (match_unconfirmed).
+			frappe.log_error(title=f"Payment {transaction.name}: gateway detail record not written")
+			transaction.status = "Failed"
+			transaction.failure_reason = "The payment could not be recorded. Please try again."
+			transaction.initiation_unconfirmed = 1 if driver.prompts_payer else 0
+			result["message"] = transaction.failure_reason
 
 	transaction.save(ignore_permissions=True)
 
-	return {
+	reply = {
 		"transaction_id": transaction.name,
 		"status": transaction.status,
 		"gateway_reference": transaction.gateway_reference,
 		"message": result.get("message"),
 	}
+	if result.get("checkout_url") and transaction.status == "Pending":
+		reply["checkout_url"] = result["checkout_url"]
+	return reply
 
 
 def _recent_prompt(gateway_name, source_doctype, source_document, phone, amount):
@@ -251,6 +291,7 @@ def get_gateway_capabilities(gateway=None):
 		"label": driver.label,
 		"currencies": list(driver.supported_currencies or []),
 		"prompts_payer": bool(driver.prompts_payer),
+		"opens_checkout": bool(driver.opens_checkout),
 	}
 
 
@@ -282,12 +323,14 @@ def _due_for_gateway_query(transaction):
 	return True
 
 
-@frappe.whitelist()
+# Not whitelisted, for the same reason as initiate_payment: over HTTP it told any logged-in
+# user the status and receipt of any payment. Apps poll through their own endpoints, which
+# check that the caller owns the document.
 @rate_limit(limit=60, seconds=60)
 def check_payment_status(transaction_id):
 	"""
 	Check the current status of a payment.
-	Called by frontend polling loops (rate-limited per IP).
+	Called by the apps' own polling endpoints (rate-limited per IP).
 
 	A decided payment is answered from our own record. A Pending one is checked with
 	the gateway at most every STATUS_QUERY_INTERVAL_SECONDS (see the constants above);
@@ -338,10 +381,13 @@ def refresh_status(transaction, force=False):
 	# being the same the moment an organisation takes both M-Pesa and bank
 	# transfer: polling an M-Pesa payment with the manual driver would report it
 	# as unresolved for ever. Falls back to the active gateway for a transaction
-	# written before the column carried anything.
-	gateway = get_gateway(transaction.gateway)
+	# written before the column carried anything. Switched off since does not matter: a
+	# payment already on its way must still be resolved.
+	gateway = get_gateway(transaction.gateway, allow_inactive=True)
 	result = gateway.check_status(transaction)
 	new_status = result["status"]
+	if result.get("review_reason"):
+		_flag_review(transaction, result["review_reason"])
 
 	if new_status == previous:
 		if transaction.as_dict(no_default_fields=True) != before:
@@ -505,8 +551,12 @@ def _run_callback(kind, data, gateway_name, log, stored_trust=None):
 	try:
 		if kind == "Receipt lookup":
 			_process_receipt_result(data, log)
+		elif kind == CARD_RETURN:
+			from onerc_payments.api.v1.card import process_return
+
+			process_return(data, log)
 		else:
-			_process_payment_callback(data, gateway_name, log, stored_trust)
+			_process_payment_callback(data, gateway_name, log, stored_trust, kind=kind)
 		frappe.db.commit()
 	except Exception:
 		error = frappe.get_traceback()
@@ -514,11 +564,11 @@ def _run_callback(kind, data, gateway_name, log, stored_trust=None):
 		# The rollback also undid the links processing had put on the log. Put back what
 		# can be worked out without processing, so the failed message is easy to find.
 		values = {"status": "Error", "error": error}
-		if kind == "Payment":
-			reference = _reference_or_none(gateway_name, data)
+		if kind in PAYMENT_KINDS:
+			reference = _reference_or_none(gateway_name, data, kind)
 			if reference:
 				values["gateway_reference"] = reference
-				transaction_name = frappe.db.get_value(TRANSACTION, {"gateway_reference": reference}, "name")
+				transaction_name = _find_transaction(kind, reference)
 				if transaction_name:
 					values["payment_transaction"] = transaction_name
 		_update_log(log, **values)
@@ -552,11 +602,43 @@ def payment_callback(gateway_name=None, **kwargs):
 	return ACCEPTED
 
 
-def _reference_or_none(gateway_name, data):
+def _reference_or_none(gateway_name, data, kind="Payment"):
 	try:
-		return _extract_gateway_reference(gateway_name, data) or None
+		return _callback_reference(kind, gateway_name, data) or None
 	except Exception:
 		return None
+
+
+# The endpoint a message arrived at decides how it is read. Every M-Pesa-shaped message
+# looks the same, so a KCB callback posted to the Daraja endpoint (or the other way round)
+# must not settle anything: each endpoint only ever settles payments of its own drivers.
+CARD_RETURN = "Card return"
+PAYMENT_KINDS = ("Payment", "KCB payment", "Card notification")
+_KIND_DRIVERS = {
+	"KCB payment": "onerc_payments.gateways.kcb_buni.KcbBuniGateway",
+	"Card notification": "onerc_payments.gateways.jenga.JengaGateway",
+}
+
+
+def _driver_for_kind(kind):
+	import importlib
+
+	module_path, class_name = _KIND_DRIVERS[kind].rsplit(".", 1)
+	return getattr(importlib.import_module(module_path), class_name)
+
+
+def _callback_reference(kind, gateway_name, data):
+	if kind == "Payment":
+		return _extract_gateway_reference(gateway_name, data)
+	return _driver_for_kind(kind).callback_reference(data)
+
+
+def _find_transaction(kind, reference):
+	if not reference:
+		return None
+	if kind == "Payment":
+		return frappe.db.get_value(TRANSACTION, {"gateway_reference": reference}, "name")
+	return _driver_for_kind(kind).find_transaction(reference)
 
 
 def _sender_trusted(gateway_name):
@@ -567,9 +649,9 @@ def _sender_trusted(gateway_name):
 		return False
 
 
-def _process_payment_callback(data, gateway_name, log, stored_trust=None):
+def _process_payment_callback(data, gateway_name, log, stored_trust=None, kind="Payment"):
 	live = stored_trust is None  # False when a saved message is processed again
-	gateway_reference = _extract_gateway_reference(gateway_name, data)
+	gateway_reference = _callback_reference(kind, gateway_name, data)
 
 	if not gateway_reference:
 		_update_log(
@@ -577,7 +659,9 @@ def _process_payment_callback(data, gateway_name, log, stored_trust=None):
 			status="Ignored",
 			note="No gateway reference in the message, so it cannot belong to a payment.",
 		)
-		if live:
+		if live and kind == "Payment":
+			# Other endpoints keep such a message on the callback log only: anyone can post
+			# there, and an Error Log row each would be an easy way to fill the database.
 			frappe.log_error(
 				title="M-Pesa callback: no reference found",
 				message=(
@@ -590,12 +674,12 @@ def _process_payment_callback(data, gateway_name, log, stored_trust=None):
 
 	_update_log(log, gateway_reference=gateway_reference)
 
-	transaction_name = frappe.db.get_value(TRANSACTION, {"gateway_reference": gateway_reference}, "name")
+	transaction_name = _find_transaction(kind, gateway_reference)
 	adopting = False
 	if not transaction_name:
 		# Our request to start this payment got no reply, so we never learned the
-		# reference Safaricom gave it. Match it by what the callback does carry.
-		transaction_name = _match_unconfirmed(data)
+		# reference the gateway gave it. Match it by what the callback does carry.
+		transaction_name = _match_unconfirmed(data, kind)
 		adopting = bool(transaction_name)
 
 	if not transaction_name:
@@ -608,7 +692,7 @@ def _process_payment_callback(data, gateway_name, log, stored_trust=None):
 				"payment had not been saved yet when this arrived."
 			),
 		)
-		if live:
+		if live and kind == "Payment":
 			frappe.log_error(
 				title="M-Pesa callback: no matching transaction",
 				message=(
@@ -622,9 +706,42 @@ def _process_payment_callback(data, gateway_name, log, stored_trust=None):
 	# it is asked now, before the row is locked: the answer can take seconds, and the
 	# payer's own status poll needs the same lock to record its result.
 	snapshot = frappe.get_doc(TRANSACTION, transaction_name)
-	# The gateway that collected this payment, never one named by the request.
-	gateway = get_gateway(snapshot.gateway)
-	trusted = _source_trusted(gateway) if live else bool(cint(stored_trust))
+	# The gateway that collected this payment, never one named by the request - and still
+	# itself if it has been switched off since: the money is on its way regardless.
+	gateway = get_gateway(snapshot.gateway, allow_inactive=True)
+	if gateway.callback_kind != kind:
+		_update_log(
+			log,
+			status="Unmatched",
+			note=(
+				f"{snapshot.name} was taken through {gateway.label}, which reports at its own address. "
+				"A message arriving here cannot settle it, so nothing was changed."
+			),
+		)
+		return
+
+	if live:
+		trusted = _source_trusted(gateway)
+	else:
+		trusted = bool(cint(stored_trust))
+		if gateway.sender_proves_payment and gateway_name != snapshot.gateway:
+			# Stored trust is "sent with the credentials of the account in ``gateway``".
+			trusted = False
+
+	if gateway.sender_proves_payment and not trusted:
+		# For such a gateway the credentials ARE the proof: without them a message says
+		# nothing, paid or failed, and is not worth a review either (anyone can send one).
+		# The log's gateway is left as it was: for such a message it records whose
+		# credentials it came with, which is what processing it again is judged by.
+		_update_log(
+			log,
+			status="Ignored",
+			payment_transaction=snapshot.name,
+			note=f"Not sent with the notification credentials of {snapshot.gateway}, so it changes nothing.",
+		)
+		return
+	if kind != "Payment":
+		_update_log(log, gateway=snapshot.gateway)
 
 	confirmation = _NOT_ASKED
 	if snapshot.status not in ("Completed", "Refunded") and (
@@ -633,7 +750,7 @@ def _process_payment_callback(data, gateway_name, log, stored_trust=None):
 		confirmation = gateway.confirm_callback(snapshot, {}, data)
 		_update_log(log, gateway_confirmation=confirmation or "Not needed")
 
-	if adopting and confirmation != CONFIRMED:
+	if adopting and (confirmation != CONFIRMED or kind != "Payment"):
 		# Only a message the gateway confirms may claim a payment: the claim is permanent
 		# (the reference is written onto it), and a wrong one would turn away the real one.
 		if confirmation == UNAVAILABLE:
@@ -642,6 +759,26 @@ def _process_payment_callback(data, gateway_name, log, stored_trust=None):
 				status="Awaiting confirmation",
 				note=f"Fits {transaction_name} by phone and amount; waiting for {gateway.label} to confirm it.",
 			)
+		elif confirmation in (None, MANUAL_CHECK):
+			# A gateway that cannot be asked: put the payment it fits in front of a person.
+			_update_log(
+				log,
+				status="Unmatched",
+				note=(
+					f"Fits {transaction_name} by phone and amount, but {gateway.label} cannot confirm it, "
+					f"so it was not matched. {transaction_name} is on the review list."
+				),
+			)
+			reason = (
+				f"A {gateway.label} message says a payment of this amount from this phone went through, "
+				"but the request that started this payment got no reply, so it cannot be matched for "
+				"certain. The message is in OneRC Payment Callback (Unmatched, linked to nothing). Check "
+				"the statement; if the payment is there, confirm it as paid here."
+			)
+			# Once per payment, however many such messages arrive (they are retried for half
+			# an hour, and anyone can send more), and never again once a person closed it.
+			if reason not in (frappe.db.get_value(TRANSACTION, transaction_name, "review_reason") or ""):
+				_flag_review(transaction_name, reason)
 		else:
 			_update_log(
 				log,
@@ -699,17 +836,24 @@ def _source_trusted(gateway):
 		return False
 
 
-def _match_unconfirmed(data):
-	"""Ask each active driver whether the callback fits a payment that got no reply."""
+def _match_unconfirmed(data, kind="Payment"):
+	"""Ask each driver reporting at this endpoint whether the callback fits a payment that
+	got no reply (active gateways, and switched-off account gateways)."""
+	from onerc_payments.gateways import gateway_rows
+
 	by_driver = {}
-	for row in frappe.get_all(
-		"OneRC Payment Gateway", filters={"is_active": 1}, fields=["name", "driver_class"]
-	):
-		by_driver.setdefault(row.driver_class, []).append(row.name)
+	for row in gateway_rows("driver_class", "is_active"):
+		# A till switched off moments after its prompt still has that payment to settle;
+		# the original gateways keep exactly the behaviour they had (active only).
+		if row.is_active or row.account:
+			by_driver.setdefault(row.driver_class, []).append(row.name)
 
 	for names in by_driver.values():
 		try:
-			match = get_gateway(names[0]).match_unconfirmed(data, names)
+			driver = get_gateway(names[0], allow_inactive=True)
+			if driver.callback_kind != kind:
+				continue
+			match = driver.match_unconfirmed(data, names)
 		except Exception:
 			frappe.logger().error("onerc_payments: matching an unconfirmed payment failed")
 			continue
@@ -783,6 +927,18 @@ def _apply_payment(gateway, transaction, result, data, confirmation, trusted=Tru
 	confirmed = confirmation in (None, CONFIRMED)
 	enforce = _settings_value("callback_confirmation") == "Enforce"
 
+	if confirmation == MANUAL_CHECK:
+		# The gateway cannot be asked and the message is not enough on its own (KCB: an
+		# account set to have every payment checked, or a message that does not fit).
+		# Nothing is written from it; it is kept on the callback log.
+		_flag_review(
+			transaction,
+			f"{gateway.label} sent a message saying this was paid, but it cannot be confirmed "
+			f"automatically: {gateway.manual_check_reason or 'the gateway cannot be asked'}. Check the "
+			"statement; if the payment is there, confirm it as paid here with its receipt.",
+		)
+		return "Needs review"
+
 	# Watch only keeps the gate that came before confirmation, too: an unconfirmed message
 	# completes a payment only if it came from the gateway's published addresses. So
 	# Watch only is never weaker than the old behaviour, only better informed.
@@ -822,6 +978,15 @@ def _apply_payment(gateway, transaction, result, data, confirmation, trusted=Tru
 
 def _apply_late_payment(gateway, transaction, current_status, result, data, confirmation):
 	"""A "paid" callback for a payment we had marked Failed or Cancelled."""
+	if confirmation == MANUAL_CHECK:
+		_flag_review(
+			transaction,
+			f"{gateway.label} sent a message saying this was paid after it was marked {current_status}, "
+			f"but it cannot be confirmed automatically: {gateway.manual_check_reason or 'the gateway cannot be asked'}. "
+			"Check the statement; if the payment is there, confirm it as paid here with its receipt.",
+		)
+		return "Needs review"
+
 	if confirmation is None:
 		# A gateway that cannot be asked: as before, take the evidence, change nothing.
 		_absorb_late_receipt(gateway, data, transaction, result)
@@ -1128,7 +1293,9 @@ def review_options(transaction_name):
 	frappe.has_permission(TRANSACTION, ptype="read", doc=transaction, throw=True)
 	can_write = frappe.has_permission(TRANSACTION, ptype="write", doc=transaction)
 	try:
-		takes_receipt = bool(getattr(get_gateway(transaction.gateway), "accepts_entered_receipt", False))
+		takes_receipt = bool(
+			getattr(get_gateway(transaction.gateway, allow_inactive=True), "accepts_entered_receipt", False)
+		)
 	except Exception:
 		takes_receipt = False
 	return {
@@ -1192,7 +1359,7 @@ def confirm_paid_after_review(transaction_name, receipt, note):
 	if transaction.status not in ("Initiated", "Pending", "Failed", "Cancelled"):
 		frappe.throw(f"{transaction.name} is {transaction.status}; only an unpaid payment can be confirmed.")
 
-	gateway = get_gateway(transaction.gateway)
+	gateway = get_gateway(transaction.gateway, allow_inactive=True)
 	code = gateway.normalise_receipt(receipt)
 	used = _receipt_used_by(code, transaction.name)
 	if used:
@@ -1292,7 +1459,7 @@ def receipt_options(transaction_name):
 		return {"missing": False, "can_enter": False, "can_request": False}
 
 	try:
-		gateway = get_gateway(transaction.gateway)
+		gateway = get_gateway(transaction.gateway, allow_inactive=True)
 	except Exception:
 		return {"missing": True, "can_enter": False, "can_request": False}
 
@@ -1327,7 +1494,7 @@ def record_gateway_receipt(transaction_name, receipt):
 	transaction.reload()
 	_assert_receipt_missing(transaction)
 
-	gateway = get_gateway(transaction.gateway)
+	gateway = get_gateway(transaction.gateway, allow_inactive=True)
 	code = gateway.normalise_receipt(receipt)
 
 	other = _receipt_used_by(code, transaction.name)
@@ -1360,7 +1527,7 @@ def request_gateway_receipt(transaction_name):
 	frappe.has_permission(TRANSACTION, ptype="write", doc=transaction, throw=True)
 	_assert_receipt_missing(transaction)
 
-	gateway = get_gateway(transaction.gateway)
+	gateway = get_gateway(transaction.gateway, allow_inactive=True)
 	if not gateway.can_request_receipt():
 		frappe.throw("This payment method is not set up to look up receipts.")
 
@@ -1410,7 +1577,7 @@ def _process_receipt_result(data, log):
 		return
 
 	transaction = frappe.get_doc(TRANSACTION, detail.payment_transaction)
-	gateway = get_gateway(transaction.gateway)
+	gateway = get_gateway(transaction.gateway, allow_inactive=True)
 	_update_log(
 		log, payment_transaction=transaction.name, source_trusted=1 if _source_trusted(gateway) else 0
 	)

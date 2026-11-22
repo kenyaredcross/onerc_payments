@@ -47,7 +47,7 @@ class TestEveryCallbackIsKept(PaymentTestCase):
 
 	def test_a_message_with_no_reference_is_kept_and_ignored(self):
 		frappe.local.request = frappe._dict(data=b'{"hello": "world"}', headers={})
-		frappe.form_dict = frappe._dict()
+		frappe.local.form_dict = frappe._dict()
 		before = frappe.db.count("OneRC Payment Callback", {"status": "Ignored"})
 
 		self.assertEqual(pay.payment_callback(gateway_name="Mpesa Daraja"), pay.ACCEPTED)
@@ -435,7 +435,7 @@ class TestWhatACallbackCannotDo(PaymentTestCase):
 
 	def test_an_oversized_message_is_kept_only_in_part(self):
 		frappe.local.request = frappe._dict(data=json.dumps({"junk": "x" * 200_000}).encode(), headers={})
-		frappe.form_dict = frappe._dict()
+		frappe.local.form_dict = frappe._dict()
 
 		pay.payment_callback(gateway_name="Mpesa Daraja")
 

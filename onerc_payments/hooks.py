@@ -199,7 +199,9 @@ app_license = "mit"
 
 # Request Events
 # ----------------
-# before_request = ["onerc_payments.utils.before_request"]
+# Jenga posts its card notification with HTTP Basic auth, which Frappe would refuse as a
+# failed API-key login. Set aside on that one address only; see request_hooks.py.
+before_request = ["onerc_payments.request_hooks.set_jenga_credentials_aside"]
 # after_request = ["onerc_payments.utils.after_request"]
 
 # Job Events
@@ -265,6 +267,8 @@ scheduler_events = {
 
 override_whitelisted_methods = {
 	"onerc_payments.api.v1.payment.payment_callback": "onerc_payments.api.v1.payment.payment_callback",
+	# KCB Buni allows a callbackUrl of at most 50 characters: https://<host>/api/method/kcb.
+	"kcb": "onerc_payments.api.v1.kcb.callback",
 }
 
 fixtures = [{"dt": "OneRC Payment Gateway", "filters": [["gateway_name", "in", ["Mpesa Daraja", "Manual"]]]}]

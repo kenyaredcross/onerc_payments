@@ -27,6 +27,8 @@ GATEWAY = "Mpesa Daraja"
 PHONE = "254712345678"
 RECEIPT = "SLK4H8N2Q6"
 SETTINGS = "OneRC Payment Settings"
+# Every per-gateway detail record a test can leave behind, keyed by payment_transaction.
+DETAIL_DOCTYPES = ("Mpesa Payment", "Manual Payment", "KCB Buni Payment", "Jenga Payment")
 SETTINGS_FIELDS = (
 	"environment",
 	"active_gateway",
@@ -159,7 +161,7 @@ class PaymentTestCase(FrappeTestCase):
 			if ref and ref not in self.references:
 				self.references.append(ref)
 		frappe.local.request = frappe._dict(data=json.dumps(payload).encode(), headers=headers or {})
-		frappe.form_dict = frappe._dict()
+		frappe.local.form_dict = frappe._dict()
 		return pay.payment_callback(gateway_name=gateway_name)
 
 	def value(self, name, field):
@@ -184,10 +186,11 @@ class PaymentTestCase(FrappeTestCase):
 		frappe.set_user("Administrator")
 		frappe.local.request = None
 		for name in self.created:
-			for detail in frappe.get_all(
-				"Mpesa Payment", filters={"payment_transaction": name}, pluck="name"
-			):
-				frappe.delete_doc("Mpesa Payment", detail, force=True, ignore_permissions=True)
+			for doctype in DETAIL_DOCTYPES:
+				if not frappe.db.table_exists(doctype):
+					continue
+				for detail in frappe.get_all(doctype, filters={"payment_transaction": name}, pluck="name"):
+					frappe.delete_doc(doctype, detail, force=True, ignore_permissions=True)
 			frappe.db.delete("OneRC Payment Callback", {"payment_transaction": name})
 			frappe.db.delete(
 				"Comment", {"reference_doctype": "OneRC Payment Transaction", "reference_name": name}

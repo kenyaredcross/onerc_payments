@@ -1,0 +1,218 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:payment_transaction",
+ "creation": "2026-11-22 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "payment_transaction",
+  "gateway",
+  "status",
+  "mpesa_receipt_number",
+  "receipt_source",
+  "column_break_main",
+  "till_number",
+  "invoice_number",
+  "phone_number",
+  "expected_amount",
+  "amount",
+  "amount_matched",
+  "ids_section",
+  "merchant_request_id",
+  "checkout_request_id",
+  "column_break_ids",
+  "result_code",
+  "result_description",
+  "transaction_date",
+  "callback_phone",
+  "raw_section",
+  "raw_request",
+  "raw_response",
+  "raw_callback"
+ ],
+ "fields": [
+  {
+   "fieldname": "payment_transaction",
+   "fieldtype": "Link",
+   "label": "Payment Transaction",
+   "options": "OneRC Payment Transaction",
+   "reqd": 1,
+   "unique": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "gateway",
+   "fieldtype": "Link",
+   "label": "Payment Gateway",
+   "options": "OneRC Payment Gateway",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "\nPending\nCompleted\nFailed\nCancelled",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "mpesa_receipt_number",
+   "fieldtype": "Data",
+   "label": "M-Pesa Receipt Number",
+   "search_index": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "receipt_source",
+   "fieldtype": "Select",
+   "label": "Receipt From",
+   "options": "\nCallback\nEntered by Staff",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "till_number",
+   "fieldtype": "Data",
+   "label": "Till Number",
+   "read_only": 1
+  },
+  {
+   "fieldname": "invoice_number",
+   "fieldtype": "Data",
+   "label": "Invoice Number",
+   "description": "What the payer saw: TILL-REFERENCE.",
+   "read_only": 1
+  },
+  {
+   "fieldname": "phone_number",
+   "fieldtype": "Data",
+   "label": "Phone Prompted",
+   "read_only": 1
+  },
+  {
+   "fieldname": "expected_amount",
+   "fieldtype": "Currency",
+   "label": "Amount Asked",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "label": "Amount Paid",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amount_matched",
+   "fieldtype": "Check",
+   "label": "Amount Matched",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ids_section",
+   "fieldtype": "Section Break",
+   "label": "KCB Request",
+   "description": "The request ID is what proves a KCB callback genuine. It is kept here only, never on the transaction."
+  },
+  {
+   "fieldname": "merchant_request_id",
+   "fieldtype": "Data",
+   "label": "Merchant Request ID",
+   "search_index": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "checkout_request_id",
+   "fieldtype": "Data",
+   "label": "Checkout Request ID",
+   "search_index": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_ids",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "result_code",
+   "fieldtype": "Data",
+   "label": "Result Code",
+   "read_only": 1
+  },
+  {
+   "fieldname": "result_description",
+   "fieldtype": "Small Text",
+   "label": "Result Description",
+   "read_only": 1
+  },
+  {
+   "fieldname": "transaction_date",
+   "fieldtype": "Datetime",
+   "label": "Transaction Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "callback_phone",
+   "fieldtype": "Data",
+   "label": "Phone in Callback",
+   "read_only": 1
+  },
+  {
+   "fieldname": "raw_section",
+   "fieldtype": "Section Break",
+   "label": "Messages",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "raw_request",
+   "fieldtype": "Code",
+   "label": "Request Sent",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "raw_response",
+   "fieldtype": "Code",
+   "label": "KCB's Reply",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "raw_callback",
+   "fieldtype": "Code",
+   "label": "Callback",
+   "options": "JSON",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-22 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Onerc Payments",
+ "name": "KCB Buni Payment",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

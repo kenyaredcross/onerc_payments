@@ -1,0 +1,255 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:account_name",
+ "creation": "2026-11-22 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "account_name",
+  "label",
+  "environment",
+  "currencies",
+  "column_break_main",
+  "merchant_code",
+  "gateway",
+  "credentials_section",
+  "api_key",
+  "consumer_secret",
+  "column_break_credentials",
+  "private_key",
+  "notification_section",
+  "ipn_username",
+  "ipn_password",
+  "column_break_notification",
+  "notification_url",
+  "query_status",
+  "checkout_section",
+  "product_type",
+  "product_description",
+  "country_code",
+  "column_break_checkout",
+  "default_email",
+  "default_address",
+  "default_postal_code",
+  "addresses_section",
+  "callback_base_url",
+  "column_break_addresses",
+  "auth_url",
+  "checkout_url"
+ ],
+ "fields": [
+  {
+   "fieldname": "account_name",
+   "fieldtype": "Data",
+   "label": "Account Name",
+   "reqd": 1,
+   "unique": 1,
+   "description": "Also the name of its payment gateway, which apps pass to start a payment, e.g. Jenga Card."
+  },
+  {
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "label": "Shown to Payers As",
+   "default": "Card"
+  },
+  {
+   "fieldname": "environment",
+   "fieldtype": "Select",
+   "label": "Environment",
+   "options": "Sandbox\nProduction",
+   "default": "Sandbox",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "currencies",
+   "fieldtype": "Small Text",
+   "label": "Currencies",
+   "default": "KES",
+   "reqd": 1,
+   "description": "Currencies this merchant takes by card, e.g. KES, USD. A payment in any other currency is refused before it starts."
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "merchant_code",
+   "fieldtype": "Data",
+   "label": "Merchant Code",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "gateway",
+   "fieldtype": "Link",
+   "label": "Payment Gateway",
+   "options": "OneRC Payment Gateway",
+   "read_only": 1,
+   "description": "Created when this account is saved, switched off. Switch it on there once Test Connection succeeds.",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "credentials_section",
+   "fieldtype": "Section Break",
+   "label": "Credentials"
+  },
+  {
+   "fieldname": "api_key",
+   "fieldtype": "Password",
+   "label": "API Key"
+  },
+  {
+   "fieldname": "consumer_secret",
+   "fieldtype": "Password",
+   "label": "Consumer Secret"
+  },
+  {
+   "fieldname": "column_break_credentials",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "private_key",
+   "fieldtype": "Password",
+   "label": "Signing Private Key",
+   "description": "PEM private key whose public key is registered with Jenga. Needed only when the merchant is in secure mode; every order is then signed."
+  },
+  {
+   "fieldname": "notification_section",
+   "fieldtype": "Section Break",
+   "label": "Payment Notification (IPN)",
+   "description": "Jenga's server confirms each card payment by posting to the Notification Address with this username and password. Register both in the JengaHQ portal (Settings, IPN). The payer's own browser is never taken as proof."
+  },
+  {
+   "fieldname": "ipn_username",
+   "fieldtype": "Data",
+   "label": "Notification Username"
+  },
+  {
+   "fieldname": "ipn_password",
+   "fieldtype": "Password",
+   "label": "Notification Password"
+  },
+  {
+   "fieldname": "column_break_notification",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "notification_url",
+   "fieldtype": "Data",
+   "label": "Notification Address",
+   "read_only": 1,
+   "description": "Register this in the JengaHQ portal. Filled in when the account is saved."
+  },
+  {
+   "fieldname": "query_status",
+   "fieldtype": "Check",
+   "label": "Ask Jenga for Payment Status",
+   "default": "0",
+   "description": "Also ask Jenga's Transaction Details API about open card payments. Switch on only after a sandbox card payment shows that it answers for card checkouts."
+  },
+  {
+   "fieldname": "checkout_section",
+   "fieldtype": "Section Break",
+   "label": "Checkout Page"
+  },
+  {
+   "fieldname": "product_type",
+   "fieldtype": "Data",
+   "label": "Product Type",
+   "default": "Payment"
+  },
+  {
+   "fieldname": "product_description",
+   "fieldtype": "Data",
+   "label": "Product Description",
+   "default": "Payment",
+   "description": "Shown on Jenga's page, followed by the payment reference."
+  },
+  {
+   "fieldname": "country_code",
+   "fieldtype": "Data",
+   "label": "Country Code",
+   "default": "KE",
+   "length": 2
+  },
+  {
+   "fieldname": "column_break_checkout",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "default_email",
+   "fieldtype": "Data",
+   "label": "Payer Email When Unknown",
+   "options": "Email",
+   "description": "Jenga requires an email; used when the app gives none."
+  },
+  {
+   "fieldname": "default_address",
+   "fieldtype": "Data",
+   "label": "Payer Address When Unknown",
+   "default": "Nairobi, Kenya"
+  },
+  {
+   "fieldname": "default_postal_code",
+   "fieldtype": "Data",
+   "label": "Payer Postal Code When Unknown",
+   "default": "00100"
+  },
+  {
+   "fieldname": "addresses_section",
+   "fieldtype": "Section Break",
+   "label": "Addresses",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "callback_base_url",
+   "fieldtype": "Data",
+   "label": "Public Site Address",
+   "description": "The public https address of this site that the provider can reach, with no path, e.g. https://pay.redcross.or.ke. Blank: the site's own address."
+  },
+  {
+   "fieldname": "column_break_addresses",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "auth_url",
+   "fieldtype": "Data",
+   "label": "Authentication URL",
+   "description": "Blank: Jenga's own for the environment. Set only if Jenga gives you another."
+  },
+  {
+   "fieldname": "checkout_url",
+   "fieldtype": "Data",
+   "label": "Checkout URL",
+   "description": "Blank: Jenga's own for the environment (production: https://v3.jengapgw.io/processPayment)."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-22 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Onerc Payments",
+ "name": "Jenga Account",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

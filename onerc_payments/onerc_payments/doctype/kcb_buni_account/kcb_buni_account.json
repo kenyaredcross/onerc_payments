@@ -1,0 +1,163 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:account_name",
+ "creation": "2026-11-22 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "account_name",
+  "label",
+  "environment",
+  "column_break_main",
+  "till_number",
+  "complete_on_callback",
+  "gateway",
+  "credentials_section",
+  "consumer_key",
+  "column_break_credentials",
+  "consumer_secret",
+  "addresses_section",
+  "callback_base_url",
+  "callback_url",
+  "column_break_addresses",
+  "production_token_url",
+  "production_stk_url"
+ ],
+ "fields": [
+  {
+   "fieldname": "account_name",
+   "fieldtype": "Data",
+   "label": "Account Name",
+   "reqd": 1,
+   "unique": 1,
+   "description": "Also the name of its payment gateway, which apps pass to start a payment, e.g. KCB Nairobi Till."
+  },
+  {
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "label": "Shown to Payers As",
+   "default": "M-Pesa (KCB till)"
+  },
+  {
+   "fieldname": "environment",
+   "fieldtype": "Select",
+   "label": "Environment",
+   "options": "Sandbox\nProduction",
+   "default": "Sandbox",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "till_number",
+   "fieldtype": "Data",
+   "label": "Till Number",
+   "reqd": 1,
+   "description": "The KCB / Vooma till the money goes to: 1 to 7 digits. The payer sees it with the payment reference in the M-Pesa prompt.",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "complete_on_callback",
+   "fieldtype": "Check",
+   "label": "Complete Payments on KCB's Callback",
+   "default": "1",
+   "description": "KCB cannot be asked whether a payment went through. On: a callback carrying the request ID only KCB was given, the exact amount, the phone prompted and an M-Pesa code completes the payment. Off: every KCB payment waits on the review list for someone to check the till statement."
+  },
+  {
+   "fieldname": "gateway",
+   "fieldtype": "Link",
+   "label": "Payment Gateway",
+   "options": "OneRC Payment Gateway",
+   "read_only": 1,
+   "description": "Created when this account is saved, switched off. Switch it on there once Test Connection succeeds.",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "credentials_section",
+   "fieldtype": "Section Break",
+   "label": "Credentials"
+  },
+  {
+   "fieldname": "consumer_key",
+   "fieldtype": "Password",
+   "label": "Consumer Key"
+  },
+  {
+   "fieldname": "column_break_credentials",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "consumer_secret",
+   "fieldtype": "Password",
+   "label": "Consumer Secret"
+  },
+  {
+   "fieldname": "addresses_section",
+   "fieldtype": "Section Break",
+   "label": "Addresses"
+  },
+  {
+   "fieldname": "callback_base_url",
+   "fieldtype": "Data",
+   "label": "Public Site Address",
+   "description": "The public https address of this site that the provider can reach, with no path, e.g. https://pay.redcross.or.ke. Blank: the site's own address. KCB takes a callback address of at most 50 characters, and ours is this address followed by /api/method/kcb, so keep the address short."
+  },
+  {
+   "fieldname": "callback_url",
+   "fieldtype": "Data",
+   "label": "Callback Address",
+   "read_only": 1,
+   "description": "What KCB is given. Filled in when the account is saved."
+  },
+  {
+   "fieldname": "column_break_addresses",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "production_token_url",
+   "fieldtype": "Data",
+   "label": "Production Token URL",
+   "depends_on": "eval:doc.environment==\"Production\"",
+   "mandatory_depends_on": "eval:doc.environment==\"Production\"",
+   "description": "From KCB when the account goes live, e.g. https://…/token"
+  },
+  {
+   "fieldname": "production_stk_url",
+   "fieldtype": "Data",
+   "label": "Production STK Push URL",
+   "depends_on": "eval:doc.environment==\"Production\"",
+   "mandatory_depends_on": "eval:doc.environment==\"Production\"",
+   "description": "From KCB when the account goes live, e.g. https://…/mm/api/request/1.0.0/stkpush"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-22 16:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Onerc Payments",
+ "name": "KCB Buni Account",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

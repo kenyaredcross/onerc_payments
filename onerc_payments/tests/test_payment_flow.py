@@ -375,7 +375,7 @@ class TestCurrencyAndAmount(PaymentTestCase):
 	def test_a_page_can_ask_what_a_gateway_takes(self):
 		self.assertEqual(
 			pay.get_gateway_capabilities(GATEWAY),
-			{"label": "M-Pesa", "currencies": ["KES"], "prompts_payer": True},
+			{"label": "M-Pesa", "currencies": ["KES"], "prompts_payer": True, "opens_checkout": False},
 		)
 
 	def test_a_gateway_that_names_no_currencies_takes_any(self):

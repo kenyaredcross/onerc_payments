@@ -1,0 +1,216 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:payment_transaction",
+ "creation": "2026-11-22 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "payment_transaction",
+  "gateway",
+  "status",
+  "order_reference",
+  "jenga_reference",
+  "receipt_source",
+  "column_break_main",
+  "amount",
+  "currency",
+  "paid_amount",
+  "paid_currency",
+  "amount_matched",
+  "payment_mode",
+  "checkout_section",
+  "checkout_opened_on",
+  "checkout_opens",
+  "column_break_checkout",
+  "return_url",
+  "bank_reference",
+  "remarks",
+  "raw_section",
+  "raw_notification",
+  "raw_return",
+  "raw_status_result"
+ ],
+ "fields": [
+  {
+   "fieldname": "payment_transaction",
+   "fieldtype": "Link",
+   "label": "Payment Transaction",
+   "options": "OneRC Payment Transaction",
+   "reqd": 1,
+   "unique": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "gateway",
+   "fieldtype": "Link",
+   "label": "Payment Gateway",
+   "options": "OneRC Payment Gateway",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "\nPending\nCompleted\nFailed\nCancelled",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "order_reference",
+   "fieldtype": "Data",
+   "label": "Order Reference",
+   "unique": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "jenga_reference",
+   "fieldtype": "Data",
+   "label": "Jenga Reference",
+   "search_index": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "receipt_source",
+   "fieldtype": "Select",
+   "label": "Reference From",
+   "options": "\nNotification\nStatus Query\nEntered by Staff",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "label": "Amount Asked",
+   "read_only": 1
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Data",
+   "label": "Currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "paid_amount",
+   "fieldtype": "Currency",
+   "label": "Amount Paid",
+   "read_only": 1
+  },
+  {
+   "fieldname": "paid_currency",
+   "fieldtype": "Data",
+   "label": "Currency Paid",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amount_matched",
+   "fieldtype": "Check",
+   "label": "Amount Matched",
+   "read_only": 1
+  },
+  {
+   "fieldname": "payment_mode",
+   "fieldtype": "Data",
+   "label": "Paid With",
+   "read_only": 1
+  },
+  {
+   "fieldname": "checkout_section",
+   "fieldtype": "Section Break",
+   "label": "Checkout"
+  },
+  {
+   "fieldname": "checkout_opened_on",
+   "fieldtype": "Datetime",
+   "label": "Checkout Last Opened",
+   "read_only": 1
+  },
+  {
+   "fieldname": "checkout_opens",
+   "fieldtype": "Int",
+   "label": "Times Checkout Opened",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_checkout",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "return_url",
+   "fieldtype": "Small Text",
+   "label": "Return Address",
+   "read_only": 1
+  },
+  {
+   "fieldname": "bank_reference",
+   "fieldtype": "Data",
+   "label": "Bank Reference",
+   "read_only": 1
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks",
+   "read_only": 1
+  },
+  {
+   "fieldname": "raw_section",
+   "fieldtype": "Section Break",
+   "label": "Messages",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "raw_notification",
+   "fieldtype": "Code",
+   "label": "Notification",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "raw_return",
+   "fieldtype": "Code",
+   "label": "Browser Return (proves nothing)",
+   "options": "JSON",
+   "read_only": 1,
+   "description": "What the payer's browser brought back from Jenga's page. Anyone can send this; only the notification or the status query decides a payment."
+  },
+  {
+   "fieldname": "raw_status_result",
+   "fieldtype": "Code",
+   "label": "Status Query Answer",
+   "options": "JSON",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-22 16:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Onerc Payments",
+ "name": "Jenga Payment",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

@@ -11,6 +11,10 @@ Adding a new gateway:
 3. Implement initiate(), check_status(), handle_callback(), generate_receipt()
 4. Create a Payment Gateway fixture record with the driver_class path
 5. Add credential fields to Payment Settings if needed
+
+A gateway that can have several accounts (KCB tills, card merchants) keeps each
+account's credentials on its own account doctype instead, and each account is a
+gateway record of its own (see ``onerc_payments.gateways.accounts``).
 """
 
 from abc import ABC, abstractmethod
@@ -19,6 +23,9 @@ from abc import ABC, abstractmethod
 CONFIRMED = "Confirmed"  # the gateway, asked directly, says it was paid
 CONTRADICTED = "Contradicted"  # the gateway says it was NOT paid
 UNAVAILABLE = "Unavailable"  # no definite answer right now (unreachable, still processing)
+# The gateway cannot be asked, and what the message carries is not enough to take it on
+# trust: a person checks the statement. ``manual_check_reason`` on the driver says why.
+MANUAL_CHECK = "Needs a person"
 
 
 class BaseGateway(ABC):
@@ -32,16 +39,80 @@ class BaseGateway(ABC):
 	# for the same thing a moment later then reuses the first instead of prompting again.
 	prompts_payer = False
 
+	# True when the payer pays on the gateway's own page (a card checkout): ``initiate``
+	# returns a ``checkout_url`` the app sends the payer to. A second request a moment later
+	# reuses the first, as for a prompt.
+	opens_checkout = False
+
 	# True when the gateway resolves a payment by itself (status query, callback), rather
 	# than a person confirming it. Only these are flagged when they hang in Pending.
 	resolves_automatically = False
 
-	def __init__(self, settings):
+	# Which callback endpoint this driver's messages arrive at (OneRC Payment Callback
+	# "kind"). A message that arrives at one endpoint can never settle a payment taken
+	# through a driver that reports at another: every M-Pesa-shaped message looks alike.
+	callback_kind = "Payment"
+
+	# True when a message from an authenticated sender is itself the gateway's word (Jenga
+	# posts its notification with a password only it and we know). Such a message from a
+	# sender that is NOT authenticated is ignored entirely - paid or failed.
+	sender_proves_payment = False
+
+	# Set by ``confirm_callback`` when it answers MANUAL_CHECK: why a person must look.
+	manual_check_reason = None
+
+	# True when the per-gateway detail record is the only place a callback can be matched
+	# from (KCB keeps its private request IDs there, Jenga its order reference). A payment
+	# whose detail record could not be written is then not left waiting for a callback
+	# that can never find it.
+	detail_is_required = False
+
+	def __init__(self, settings, gateway=None):
 		"""
 		settings is the Payment Settings single doc.
-		Each driver reads the credentials it needs from settings.
+		gateway is the OneRC Payment Gateway record this driver was loaded for. A driver
+		with several accounts reads its credentials from ``self.account``; the others read
+		them from settings.
 		"""
 		self.settings = settings
+		self.gateway = gateway
+		self._account = None
+
+	@property
+	def gateway_name(self):
+		return self.gateway.name if self.gateway else None
+
+	@property
+	def account(self):
+		"""The account record behind this gateway (e.g. a KCB Buni Account), or None."""
+		import frappe
+
+		if self._account is None and self.gateway and self.gateway.get("account"):
+			self._account = frappe.get_doc(self.gateway.account_doctype, self.gateway.account)
+		return self._account
+
+	def validate_account(self):
+		"""Refuse to be switched on (or to take a payment) while set up in a way that cannot
+		work: missing credentials, a callback address the gateway cannot reach. Default: no
+		checks."""
+		return None
+
+	@staticmethod
+	def find_transaction(reference):
+		"""The transaction a callback ``reference`` belongs to. Default: the transaction
+		whose gateway_reference it is. A driver whose reference must stay private (it is
+		what proves a callback genuine) keeps it on its detail record instead."""
+		import frappe
+
+		if not reference:
+			return None
+		return frappe.db.get_value("OneRC Payment Transaction", {"gateway_reference": reference}, "name")
+
+	@staticmethod
+	def callback_reference(data):
+		"""The reference a message at this driver's own endpoint carries. Only drivers with
+		their own ``callback_kind`` need it; "Payment" messages use the shared extractor."""
+		return None
 
 	def check_currency(self, currency):
 		"""Refuse a currency this gateway cannot collect, before anything is written."""
