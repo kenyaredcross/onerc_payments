@@ -23,7 +23,14 @@
   "manual_bank_name",
   "manual_account_number",
   "column_break_yseu",
-  "manual_instructions"
+  "manual_instructions",
+  "callback_checks_section",
+  "callback_confirmation",
+  "column_break_checks",
+  "recover_failed_payments",
+  "references_section",
+  "default_reference_prefix",
+  "reference_prefixes"
  ],
  "fields": [
   {
@@ -115,23 +122,64 @@
    "fieldtype": "Column Break"
   },
   {
+   "description": "The API operator Safaricom set up for this shortcode. Needed only to look up an M-Pesa code that a lost callback never delivered.",
    "fieldname": "mpesa_initiator_name",
    "fieldtype": "Data",
-   "label": "MPESA Initiator Name",
-   "description": "The API operator Safaricom set up for this shortcode. Needed only to look up an M-Pesa code that a lost callback never delivered."
+   "label": "MPESA Initiator Name"
   },
   {
+   "description": "The initiator's password encrypted with Safaricom's certificate, as generated on the Daraja portal for this environment.",
    "fieldname": "mpesa_security_credential",
    "fieldtype": "Password",
-   "label": "MPESA Security Credential",
-   "description": "The initiator's password encrypted with Safaricom's certificate, as generated on the Daraja portal for this environment."
+   "label": "MPESA Security Credential"
+  },
+  {
+   "fieldname": "callback_checks_section",
+   "fieldtype": "Section Break",
+   "label": "Payment Confirmation Checks"
+  },
+  {
+   "default": "Watch only",
+   "description": "When a gateway message says a payment succeeded, we ask the gateway ourselves before trusting it. Watch only: the payment completes as before and anything the gateway did not confirm is flagged for review. Enforce: a payment completes only once the gateway confirms it.",
+   "fieldname": "callback_confirmation",
+   "fieldtype": "Select",
+   "label": "Confirm Callbacks With the Gateway",
+   "options": "Watch only\nEnforce"
+  },
+  {
+   "fieldname": "column_break_checks",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "description": "If a payment was recorded as Failed and the gateway later confirms it was paid, mark it Completed and tell the app it belongs to. If that app's record was already paid by another payment, it is flagged as paid twice instead.",
+   "fieldname": "recover_failed_payments",
+   "fieldtype": "Check",
+   "label": "Recover Payments Marked Failed That the Gateway Confirms Were Paid"
+  },
+  {
+   "fieldname": "references_section",
+   "fieldtype": "Section Break",
+   "label": "Account Reference Shown to the Payer"
+  },
+  {
+   "description": "Up to 5 letters or numbers, e.g. KRCS. Each payment gets the prefix plus a running number, e.g. KRCS000123. This is the account number the payer sees on the M-Pesa prompt, in their SMS and on the statement. Used for any app without its own row below; PAY if left blank.",
+   "fieldname": "default_reference_prefix",
+   "fieldtype": "Data",
+   "label": "Default Reference Prefix"
+  },
+  {
+   "fieldname": "reference_prefixes",
+   "fieldtype": "Table",
+   "label": "Prefix per App",
+   "options": "OneRC Payment Reference Prefix"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-09 12:00:00.000000",
+ "modified": "2026-11-17 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Onerc Payments",
  "name": "OneRC Payment Settings",

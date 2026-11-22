@@ -5,3 +5,4 @@
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
 onerc_payments.patches.link_gateway_detail
+onerc_payments.patches.set_payment_check_defaults

@@ -256,15 +256,15 @@ scheduler_events = {
 		"onerc_payments.tasks.poll_pending_transactions",
 		"onerc_payments.tasks.request_missing_receipts",
 	],
+	"cron": {
+		"*/5 * * * *": [
+			"onerc_payments.tasks.retry_unconfirmed_callbacks",
+		],
+	},
 }
 
 override_whitelisted_methods = {
 	"onerc_payments.api.v1.payment.payment_callback": "onerc_payments.api.v1.payment.payment_callback",
 }
 
-fixtures = [
-    {
-        "dt": "OneRC Payment Gateway",
-        "filters": [["gateway_name", "in", ["Mpesa Daraja", "Manual"]]]
-    }
-]
+fixtures = [{"dt": "OneRC Payment Gateway", "filters": [["gateway_name", "in", ["Mpesa Daraja", "Manual"]]]}]

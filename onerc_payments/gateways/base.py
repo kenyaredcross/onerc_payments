@@ -15,8 +15,26 @@ Adding a new gateway:
 
 from abc import ABC, abstractmethod
 
+# What ``confirm_callback`` can answer about a callback that claims a payment succeeded.
+CONFIRMED = "Confirmed"  # the gateway, asked directly, says it was paid
+CONTRADICTED = "Contradicted"  # the gateway says it was NOT paid
+UNAVAILABLE = "Unavailable"  # no definite answer right now (unreachable, still processing)
+
 
 class BaseGateway(ABC):
+	# What a person calls this payment method, for messages shown to them.
+	label = "This payment method"
+
+	# Currencies this gateway can collect, e.g. ("KES",). None means any.
+	supported_currencies = None
+
+	# True when starting a payment sends the payer a prompt (an STK push). A second request
+	# for the same thing a moment later then reuses the first instead of prompting again.
+	prompts_payer = False
+
+	# True when the gateway resolves a payment by itself (status query, callback), rather
+	# than a person confirming it. Only these are flagged when they hang in Pending.
+	resolves_automatically = False
 
 	def __init__(self, settings):
 		"""
@@ -25,18 +43,52 @@ class BaseGateway(ABC):
 		"""
 		self.settings = settings
 
+	def check_currency(self, currency):
+		"""Refuse a currency this gateway cannot collect, before anything is written."""
+		import frappe
+
+		allowed = self.supported_currencies
+		if allowed and (currency or "").strip().upper() not in allowed:
+			frappe.throw(
+				f"{self.label} only accepts payments in {', '.join(allowed)}. "
+				f"Ask for the amount in {allowed[0]}, or choose another way to pay."
+			)
+
 	def verify_callback_source(self):
 		"""
-		Return True if the current inbound request is from a trusted source.
+		Return True if the current inbound request comes from an address the
+		gateway is known to send from.
 
-		Called by the callback endpoint BEFORE any processing. Drivers that
-		can authenticate callbacks (e.g. by source-IP allowlist) should
-		override this and return False for untrusted callers.
+		For information only: the answer is saved on the callback log. It does not
+		decide whether a callback is processed - a source address can be faked
+		through proxy headers, so the real check is ``confirm_callback``.
 
-		Default: trust (no verification). Overriding is optional so existing
-		drivers keep working unchanged.
+		Default: True.
 		"""
 		return True
+
+	def confirm_callback(self, transaction, result, data):
+		"""Ask the gateway directly whether a callback's "paid" is real.
+
+		Called before a callback that claims success is allowed to complete a payment
+		or recover one marked Failed. Return CONFIRMED, CONTRADICTED or UNAVAILABLE.
+
+		Default: None, meaning this gateway cannot be asked; the callback is trusted as
+		it always was.
+		"""
+		return None
+
+	def match_unconfirmed(self, data, gateway_names):
+		"""Find the payment a callback belongs to when its reference matches nothing.
+
+		That happens when the request to start the payment timed out: the gateway
+		created the payment, but its reply - carrying the reference - never reached us.
+		Return the transaction name only when exactly one payment fits; otherwise None.
+		``gateway_names`` are the gateway records that use this driver.
+
+		Default: None (no matching).
+		"""
+		return None
 
 	def record_payment_details(self, data, transaction):
 		"""Persist a gateway-specific detail record from a verified callback and

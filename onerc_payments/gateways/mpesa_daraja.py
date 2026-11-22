@@ -10,18 +10,38 @@ https://developer.safaricom.co.ke/Documentation
 """
 
 import base64
+import hashlib
 import ipaddress
+import math
 import re
 from datetime import datetime
 
 import frappe
 import requests
+from frappe.utils import add_to_date, cint, flt, now_datetime
 from frappe.utils.password import get_decrypted_password
 
-from .base import BaseGateway
+from .base import CONFIRMED, CONTRADICTED, UNAVAILABLE, BaseGateway
 
 SANDBOX_BASE = "https://sandbox.safaricom.co.ke"
 PRODUCTION_BASE = "https://api.safaricom.co.ke"
+
+# Access tokens are cached per environment + shortcode + consumer key, so switching
+# Sandbox/Production or changing keys can never reuse a token issued for the old ones.
+# Saving OneRC Payment Settings clears them all (see clear_token_cache).
+TOKEN_CACHE_PREFIX = "onerc_payments:daraja_token"
+# Daraja's answers when it no longer accepts a token: fetch a new one and retry once.
+TOKEN_REJECTED_CODES = frozenset(["404.001.03", "401.002.01"])
+
+# Asking Safaricom to confirm a callback happens while Safaricom waits for our reply, so
+# it gets less time than a normal query. No answer in time is "Unavailable", never a
+# failure: the payment stays as it was and is asked again later.
+CONFIRM_TIMEOUT_SECONDS = 10
+
+# How far back a payment that got no reply when its prompt was sent can be matched to a
+# callback carrying an ID we never saw. A prompt expires on the phone within about a
+# minute; the margin is for slow networks and clocks.
+UNCONFIRMED_MATCH_MINUTES = 20
 
 # STK ResultCodes that mean the push is finished and did NOT succeed. Anything here
 # is final: the customer will never be prompted again for this CheckoutRequestID, so
@@ -33,16 +53,18 @@ PRODUCTION_BASE = "https://api.safaricom.co.ke"
 # circuits on a Failed transaction, so a premature Failed would make us DISCARD a
 # genuine callback that arrived afterwards. Leaving an unknown code Pending only costs
 # another poll.
-TERMINAL_STK_FAILURE_CODES = frozenset([
-	"1",     # insufficient balance
-	"1001",  # another transaction is already in process for this subscriber
-	"1019",  # transaction expired
-	"1025",  # error sending the push / message too long
-	"1032",  # cancelled by the customer
-	"1037",  # timed out - customer never entered the PIN / phone unreachable
-	"2001",  # wrong M-Pesa PIN entered
-	"9999",  # unhandled error on Safaricom's side while pushing
-])
+TERMINAL_STK_FAILURE_CODES = frozenset(
+	[
+		"1",  # insufficient balance
+		"1001",  # another transaction is already in process for this subscriber
+		"1019",  # transaction expired
+		"1025",  # error sending the push / message too long
+		"1032",  # cancelled by the customer
+		"1037",  # timed out - customer never entered the PIN / phone unreachable
+		"2001",  # wrong M-Pesa PIN entered
+		"9999",  # unhandled error on Safaricom's side while pushing
+	]
+)
 
 # Safaricom Daraja publishes a fixed set of source IPs for callbacks.
 # Reference: https://developer.safaricom.co.ke/Documentation
@@ -51,20 +73,22 @@ TERMINAL_STK_FAILURE_CODES = frozenset([
 # An M-Pesa receipt number: ten capital letters and digits, e.g. TKB1A2C3D4.
 MPESA_RECEIPT_PATTERN = re.compile(r"^[A-Z0-9]{10}$")
 
-SAFARICOM_PRODUCTION_IPS = frozenset([
-	"196.201.212.69",
-	"196.201.212.74",
-	"196.201.212.127",
-	"196.201.212.129",
-	"196.201.212.136",
-	"196.201.212.138",
-	"196.201.213.44",
-	"196.201.213.114",
-	"196.201.214.200",
-	"196.201.214.206",
-	"196.201.214.207",
-	"196.201.214.208",
-])
+SAFARICOM_PRODUCTION_IPS = frozenset(
+	[
+		"196.201.212.69",
+		"196.201.212.74",
+		"196.201.212.127",
+		"196.201.212.129",
+		"196.201.212.136",
+		"196.201.212.138",
+		"196.201.213.44",
+		"196.201.213.114",
+		"196.201.214.200",
+		"196.201.214.206",
+		"196.201.214.207",
+		"196.201.214.208",
+	]
+)
 
 
 def client_ip():
@@ -74,27 +98,50 @@ def client_ip():
 	return getattr(frappe.local, "request_ip", None) or ""
 
 
+def _request_header(name):
+	"""A request header, or None when there is no request or it carries no headers."""
+	try:
+		headers = getattr(frappe.request, "headers", None) if frappe.request else None
+		return headers.get(name) if headers else None
+	except Exception:
+		return None
+
+
 def _as_int(value, default=-1):
 	"""Daraja is inconsistent about whether a result code is an int or a string."""
 	try:
 		return int(value)
-	except (TypeError, ValueError):
+	except TypeError, ValueError:
 		return default
 
 
+def charged_amount(amount):
+	"""The whole-shilling amount M-Pesa is asked for.
+
+	Daraja takes whole shillings only. ``int()`` used to round down, so KES 1,500.50 was
+	collected as 1,500; rounding up never collects less than was asked for. Rounded to
+	cents first so a float like 100.00000001 does not become 101.
+	"""
+	return max(1, math.ceil(round(flt(amount), 2)))
+
+
+def clear_token_cache():
+	"""Forget every cached Daraja access token on this site (and the pre-2026-11 key)."""
+	frappe.cache().delete_keys(TOKEN_CACHE_PREFIX)
+
+
 class MpesaDarajaGateway(BaseGateway):
+	label = "M-Pesa"
+	supported_currencies = ("KES",)
+	prompts_payer = True
+	resolves_automatically = True
 
 	def _base_url(self):
 		if self.settings.environment == "Production":
 			return PRODUCTION_BASE
 		return SANDBOX_BASE
 
-	def _get_token(self):
-		cache_key = "onerc_payments:daraja_token"
-		cached = frappe.cache().get_value(cache_key)
-		if cached:
-			return cached
-
+	def _credentials(self):
 		key = get_decrypted_password(
 			"OneRC Payment Settings",
 			"OneRC Payment Settings",
@@ -107,12 +154,25 @@ class MpesaDarajaGateway(BaseGateway):
 			"mpesa_consumer_secret",
 			raise_exception=False,
 		)
+		return key, secret
 
+	def _token_cache_key(self, consumer_key):
+		scope = f"{self.settings.environment}|{self.settings.mpesa_shortcode}|{consumer_key}"
+		return f"{TOKEN_CACHE_PREFIX}:{hashlib.sha256(scope.encode()).hexdigest()[:16]}"
+
+	def _get_token(self, refresh=False):
+		key, secret = self._credentials()
 		if not key or not secret:
 			frappe.throw(
 				"M-Pesa consumer key or secret is not configured. "
 				"Go to OneRC Payment Settings and enter your credentials."
 			)
+
+		cache_key = self._token_cache_key(key)
+		if not refresh:
+			cached = frappe.cache().get_value(cache_key)
+			if cached:
+				return cached
 
 		url = f"{self._base_url()}/oauth/v1/generate?grant_type=client_credentials"
 		response = requests.get(
@@ -121,10 +181,51 @@ class MpesaDarajaGateway(BaseGateway):
 			timeout=30,
 		)
 		response.raise_for_status()
-		token = response.json().get("access_token")
+		body = response.json()
+		token = body.get("access_token")
+		if not token:
+			frappe.throw(
+				"Safaricom did not return an M-Pesa access token. Check the consumer key and secret."
+			)
 
-		frappe.cache().set_value(cache_key, token, expires_in_sec=3300)
+		# Safaricom says how long the token lives (3599 s today); stop using it two
+		# minutes early so a request never goes out with a token about to expire.
+		lifetime = cint(body.get("expires_in")) or 3599
+		frappe.cache().set_value(cache_key, token, expires_in_sec=max(60, lifetime - 120))
 		return token
+
+	@staticmethod
+	def _token_rejected(response):
+		"""True when Daraja refused the access token rather than the request."""
+		if getattr(response, "status_code", None) == 401:
+			return True
+		try:
+			body = response.json()
+		except Exception:
+			return False
+		if not isinstance(body, dict):
+			return False
+		return (
+			str(body.get("errorCode") or "") in TOKEN_REJECTED_CODES
+			or "invalid access token" in str(body.get("errorMessage") or "").lower()
+		)
+
+	def _post(self, path, payload, timeout=30):
+		"""POST to Daraja. If Safaricom rejects the cached token (it can expire one early),
+		fetch a fresh token and send once more. A rejected token means the request itself
+		was never processed, so sending it again cannot double anything."""
+		url = f"{self._base_url()}{path}"
+		response = requests.post(
+			url, json=payload, headers={"Authorization": f"Bearer {self._get_token()}"}, timeout=timeout
+		)
+		if self._token_rejected(response):
+			response = requests.post(
+				url,
+				json=payload,
+				headers={"Authorization": f"Bearer {self._get_token(refresh=True)}"},
+				timeout=timeout,
+			)
+		return response
 
 	def _generate_password(self, timestamp):
 		passkey = get_decrypted_password(
@@ -136,15 +237,10 @@ class MpesaDarajaGateway(BaseGateway):
 
 		if not passkey:
 			frappe.throw(
-				"M-Pesa passkey is not configured. "
-				"Go to OneRC Payment Settings and enter your passkey."
+				"M-Pesa passkey is not configured. Go to OneRC Payment Settings and enter your passkey."
 			)
 
-		raw = (
-			self.settings.mpesa_shortcode
-			+ passkey
-			+ timestamp
-		)
+		raw = self.settings.mpesa_shortcode + passkey + timestamp
 		return base64.b64encode(raw.encode()).decode()
 
 	def _timestamp(self):
@@ -183,10 +279,7 @@ class MpesaDarajaGateway(BaseGateway):
 	def _redacted(payload):
 		"""Return a JSON string of the request payload with secrets removed,
 		safe to persist for audit/debugging."""
-		safe = {
-			k: v for k, v in payload.items()
-			if k not in ("Password", "SecurityCredential")
-		}
+		safe = {k: v for k, v in payload.items() if k not in ("Password", "SecurityCredential")}
 		return frappe.as_json(safe)
 
 	# ── CALLBACK SOURCE VERIFICATION ─────────────────────────────────
@@ -209,11 +302,11 @@ class MpesaDarajaGateway(BaseGateway):
 				candidates.append(value)
 
 		add(client_ip())
-		xff = frappe.get_request_header("X-Forwarded-For") or ""
+		xff = _request_header("X-Forwarded-For") or ""
 		for part in xff.split(","):
 			add(part)
 		for header in ("CF-Connecting-IP", "True-Client-IP", "X-Real-IP"):
-			add(frappe.get_request_header(header))
+			add(_request_header(header))
 
 		return candidates
 
@@ -242,37 +335,27 @@ class MpesaDarajaGateway(BaseGateway):
 		return False
 
 	def verify_callback_source(self):
-		"""Only accept callbacks from Safaricom's published IPs in production.
+		"""Whether the callback appears to come from one of Safaricom's published IPs.
 
-		In Sandbox, allow any source so the Daraja STK simulator can drive the flow.
-		In production we check *every* candidate source IP (request_ip, the full
-		X-Forwarded-For chain, and common CDN headers) so a genuine callback isn't
-		rejected just because a proxy hop rewrote the peer address - the previous
-		single-IP check was the most likely reason receipts weren't landing behind a
-		reverse proxy. Operators can widen the allowlist via
-		frappe.conf.mpesa_extra_allowed_ips (comma-separated, CIDR supported), or -
-		for proxy topologies where the origin IP genuinely can't be recovered - set
-		frappe.conf.mpesa_verify_callback_ip = 0 to fall back to the unguessable
-		per-transaction CheckoutRequestID match (which is the real security gate).
+		For information only - the answer is saved on the callback log and never decides
+		whether a callback is processed. It used to: callbacks from elsewhere were refused.
+		But every candidate below except request_ip can be set by whoever sends the
+		request (CF-Connecting-IP, True-Client-IP and X-Real-IP pass straight through a
+		stock bench nginx), so the check could be passed by anyone who knew a Safaricom IP,
+		while a proxy change could make it refuse Safaricom itself. A "paid" callback is
+		now confirmed by asking Safaricom directly (``confirm_callback``) instead.
+
+		Sandbox is always True so the Daraja simulator shows as trusted.
+		``mpesa_extra_allowed_ips`` in site_config still widens the list.
 		"""
 		if self.settings.environment != "Production":
-			return True
-
-		if not frappe.conf.get("mpesa_verify_callback_ip", True):
-			frappe.logger().warning(
-				"onerc_payments: M-Pesa callback IP verification is disabled "
-				"(mpesa_verify_callback_ip=0); relying on the CheckoutRequestID match."
-			)
 			return True
 
 		extra = frappe.conf.get("mpesa_extra_allowed_ips") or []
 		if isinstance(extra, str):
 			extra = [x.strip() for x in extra.split(",") if x.strip()]
 
-		return any(
-			self._ip_in_allowlist(src, extra)
-			for src in self._candidate_source_ips()
-		)
+		return any(self._ip_in_allowlist(src, extra) for src in self._candidate_source_ips())
 
 	# ── INBOUND — STK Push ───────────────────────────────────────────
 
@@ -286,32 +369,53 @@ class MpesaDarajaGateway(BaseGateway):
 			"Password": self._generate_password(timestamp),
 			"Timestamp": timestamp,
 			"TransactionType": "CustomerPayBillOnline",
-			"Amount": int(transaction.amount),
+			"Amount": charged_amount(transaction.amount),
 			"PartyA": transaction.phone_number,
 			"PartyB": self.settings.mpesa_shortcode,
 			"PhoneNumber": transaction.phone_number,
 			"CallBackURL": self._callback_url(transaction),
-			"AccountReference": transaction.name,
-			"TransactionDesc": (
-				f"{transaction.source_app} — {transaction.source_document}"
-			),
+			"AccountReference": self._account_reference(transaction),
+			"TransactionDesc": self._transaction_desc(transaction),
 		}
 
 		raw_request = self._redacted(payload)
 
+		# Anything that fails before the push is sent - missing credentials, Safaricom's
+		# token endpoint down - is a plain failure: no prompt can have reached the payer.
 		try:
-			response = requests.post(
-				f"{self._base_url()}/mpesa/stkpush/v1/processrequest",
-				json=payload,
-				headers={"Authorization": f"Bearer {self._get_token()}"},
-				timeout=30,
-			)
-			data = response.json()
+			self._get_token()
 		except Exception as e:
+			return {"success": False, "raw_request": raw_request, "message": str(e)}
+
+		try:
+			response = self._post("/mpesa/stkpush/v1/processrequest", payload)
+		except requests.exceptions.ConnectTimeout as e:
+			# Never connected, so nothing was sent.
+			return {"success": False, "raw_request": raw_request, "message": str(e)}
+		except requests.exceptions.RequestException as e:
+			# Sent, but no usable reply (read timeout, connection dropped). Safaricom may
+			# well have prompted the payer; only its reply - with the CheckoutRequestID -
+			# was lost. Marked so a callback for it can still be matched later.
 			return {
 				"success": False,
+				"unconfirmed": True,
 				"raw_request": raw_request,
-				"message": str(e),
+				"message": (
+					"Safaricom did not reply in time. If an M-Pesa prompt reached the phone "
+					f"and was paid, it will be matched automatically. ({e})"
+				),
+			}
+
+		try:
+			data = response.json()
+		except ValueError:
+			status_code = getattr(response, "status_code", 0) or 0
+			return {
+				"success": False,
+				"unconfirmed": status_code >= 500,
+				"raw_request": raw_request,
+				"raw_response": (getattr(response, "text", "") or "")[:2000],
+				"message": f"Safaricom returned an unreadable reply (HTTP {status_code}).",
 			}
 
 		if data.get("ResponseCode") == "0":
@@ -321,10 +425,7 @@ class MpesaDarajaGateway(BaseGateway):
 				"merchant_request_id": data.get("MerchantRequestID"),
 				"raw_request": raw_request,
 				"raw_response": frappe.as_json(data),
-				"message": (
-					"Check your phone and enter your M-Pesa PIN "
-					"to complete the payment."
-				),
+				"message": ("Check your phone and enter your M-Pesa PIN to complete the payment."),
 			}
 
 		return {
@@ -336,7 +437,27 @@ class MpesaDarajaGateway(BaseGateway):
 			"message": data.get("CustomerMessage") or data.get("errorMessage"),
 		}
 
-	def check_status(self, transaction):
+	@staticmethod
+	def _account_reference(transaction):
+		"""What the payer sees as the account number: 12 letters and digits at most.
+
+		Allocated by ``onerc_payments.references`` when the payment is started. A
+		transaction without one (started before references existed) falls back to its
+		name with the hyphens dropped - PAY202600042 - which is exactly 12 characters,
+		instead of the 14 Safaricom used to cut short.
+		"""
+		value = transaction.get("account_reference") or transaction.name or ""
+		return re.sub(r"[^A-Za-z0-9]", "", value).upper()[:12]
+
+	@staticmethod
+	def _transaction_desc(transaction):
+		"""TransactionDesc: 13 characters at most. It used to be "<app> — <document>",
+		far over the limit and with a non-ASCII dash."""
+		from onerc_payments.references import FALLBACK_DESCRIPTION, clean_description
+
+		return clean_description(transaction.flags.get("reference_description")) or FALLBACK_DESCRIPTION
+
+	def check_status(self, transaction, timeout=30):
 		timestamp = self._timestamp()
 		payload = {
 			"BusinessShortCode": self.settings.mpesa_shortcode,
@@ -346,16 +467,11 @@ class MpesaDarajaGateway(BaseGateway):
 		}
 
 		try:
-			response = requests.post(
-				f"{self._base_url()}/mpesa/stkpushquery/v1/query",
-				json=payload,
-				headers={"Authorization": f"Bearer {self._get_token()}"},
-				timeout=30,
-			)
+			response = self._post("/mpesa/stkpushquery/v1/query", payload, timeout=timeout)
 			data = response.json()
 		except Exception as e:
 			frappe.logger().error(f"Daraja status query failed: {e}")
-			return {"status": "Pending"}
+			return {"status": "Pending", "unreachable": True}
 
 		result_code = str(data.get("ResultCode", ""))
 		result_desc = data.get("ResultDesc")
@@ -385,10 +501,12 @@ class MpesaDarajaGateway(BaseGateway):
 	def handle_callback(self, data, transaction):
 		try:
 			callback = data["Body"]["stkCallback"]
-		except (KeyError, TypeError):
+		except KeyError, TypeError:
+			# Not an STK callback at all, so it says nothing about the payment. (It used
+			# to fail a Pending payment - anyone holding its reference could do that.)
 			return {
-				"status": "Failed",
-				"failure_reason": "Invalid callback structure",
+				"status": "Pending",
+				"failure_reason": "Not an M-Pesa STK callback",
 			}
 
 		# Daraja sends ResultCode as an int on the STK callback and as a string on the
@@ -398,29 +516,28 @@ class MpesaDarajaGateway(BaseGateway):
 		result_desc = callback.get("ResultDesc")
 
 		if result_code == 0:
-			meta = {
-				item.get("Name"): item.get("Value")
-				for item in (callback.get("CallbackMetadata") or {}).get("Item", [])
-			}
+			meta = self._metadata(callback)
 			receipt = meta.get("MpesaReceiptNumber")
 
-			# Cross-check the amount the customer actually paid against what we
-			# requested. A mismatch shouldn't silently pass — flag it loudly.
+			# Cross-check the amount the customer actually paid against what we asked
+			# M-Pesa for. An STK payment cannot be for a different amount, so a mismatch
+			# means the message is not what Safaricom sent: it is flagged for review.
 			paid = meta.get("Amount")
-			if paid is not None and float(paid) != float(transaction.amount):
+			mismatch = None
+			if paid is not None and flt(paid) != charged_amount(transaction.amount):
+				mismatch = f"The callback says {paid} was paid, but M-Pesa was asked for {charged_amount(transaction.amount)}."
 				frappe.logger().warning(
-					f"onerc_payments: M-Pesa amount mismatch on {transaction.name} "
-					f"— requested {transaction.amount}, paid {paid}"
+					f"onerc_payments: M-Pesa amount mismatch on {transaction.name}: {mismatch}"
 				)
 
 			return {
 				"status": "Completed",
+				# Kept exactly as Safaricom sent it.
 				"gateway_receipt": receipt,
 				"result_code": str(result_code),
 				"result_description": result_desc,
-				"transaction_date": self._parse_mpesa_date(
-					meta.get("TransactionDate")
-				),
+				"transaction_date": self._parse_mpesa_date(meta.get("TransactionDate")),
+				"amount_mismatch": mismatch,
 			}
 
 		return {
@@ -443,7 +560,7 @@ class MpesaDarajaGateway(BaseGateway):
 		"""
 		try:
 			callback = data["Body"]["stkCallback"]
-		except (KeyError, TypeError):
+		except KeyError, TypeError:
 			return None
 
 		checkout_id = callback.get("CheckoutRequestID")
@@ -451,18 +568,35 @@ class MpesaDarajaGateway(BaseGateway):
 			return None
 
 		result_code = callback.get("ResultCode")
-		meta = {
-			item.get("Name"): item.get("Value")
-			for item in (callback.get("CallbackMetadata", {}) or {}).get("Item", [])
-		}
+		meta = self._metadata(callback)
+
+		# A second "paid" for the same request carrying a DIFFERENT receipt is not a
+		# Safaricom retry (a retry repeats the receipt). Keep the record of the first;
+		# the second message is still kept, on the callback log.
+		existing = frappe.db.get_value(
+			"Mpesa Payment",
+			{"checkout_request_id": checkout_id},
+			["name", "mpesa_receipt_number"],
+			as_dict=True,
+		)
+		incoming = meta.get("MpesaReceiptNumber")
+		if (
+			existing
+			and existing.mpesa_receipt_number
+			and incoming
+			and incoming != existing.mpesa_receipt_number
+		):
+			transaction.gateway_detail_doctype = "Mpesa Payment"
+			transaction.gateway_detail = existing.name
+			return existing.name
 
 		paid = meta.get("Amount")
-		expected = float(transaction.amount or 0)
+		expected = charged_amount(transaction.amount)
 		amount_matched = 1
 		if paid is not None:
 			try:
 				amount_matched = 1 if float(paid) == expected else 0
-			except (TypeError, ValueError):
+			except TypeError, ValueError:
 				amount_matched = 0
 
 		phone = meta.get("PhoneNumber")
@@ -471,7 +605,9 @@ class MpesaDarajaGateway(BaseGateway):
 			"payment_transaction": transaction.name,
 			"merchant_request_id": callback.get("MerchantRequestID"),
 			"checkout_request_id": checkout_id,
-			"status": "Completed" if result_code == 0 else "Failed",
+			# Coerced: the callback sends ResultCode as an int or a string, and a strict
+			# `== 0` filed a successful "0" as Failed on this record.
+			"status": "Completed" if _as_int(result_code) == 0 else "Failed",
 			"result_code": str(result_code) if result_code is not None else None,
 			"result_description": callback.get("ResultDesc"),
 			"mpesa_receipt_number": meta.get("MpesaReceiptNumber"),
@@ -509,9 +645,7 @@ class MpesaDarajaGateway(BaseGateway):
 			"checkout_request_id": checkout_id,
 			"status": result.get("status"),
 			"result_code": result.get("result_code"),
-			"result_description": (
-				result.get("result_description") or result.get("failure_reason")
-			),
+			"result_description": (result.get("result_description") or result.get("failure_reason")),
 			"mpesa_receipt_number": result.get("gateway_receipt"),
 		}
 		return self._upsert_mpesa_payment(checkout_id, values).name
@@ -536,7 +670,7 @@ class MpesaDarajaGateway(BaseGateway):
 			# we're waiting on their PIN ("Pending"); a failed push is "Failed". Either
 			# is truer than a stuck "Initiated" that never advances.
 			"status": "Pending" if result.get("success") else "Failed",
-			"expected_amount": float(transaction.amount or 0),
+			"expected_amount": charged_amount(transaction.amount),
 			"raw_request": result.get("raw_request"),
 			"raw_response": result.get("raw_response"),
 		}
@@ -572,8 +706,81 @@ class MpesaDarajaGateway(BaseGateway):
 			return None
 		try:
 			return datetime.strptime(str(value), "%Y%m%d%H%M%S")
-		except (ValueError, TypeError):
+		except ValueError, TypeError:
 			return None
+
+	@staticmethod
+	def _metadata(callback):
+		"""CallbackMetadata.Item as a dict (Amount, MpesaReceiptNumber, PhoneNumber, ...)."""
+		items = (callback.get("CallbackMetadata") or {}).get("Item") or []
+		if isinstance(items, dict):
+			items = [items]
+		return {item.get("Name"): item.get("Value") for item in items if isinstance(item, dict)}
+
+	# ── CONFIRMING A "PAID" CALLBACK ─────────────────────────────────
+	#
+	# The callback endpoint is open to the internet and the CheckoutRequestID reaches the
+	# payer's own browser, so a callback saying "paid" proves nothing by itself. Before it
+	# may complete a payment, we ask Safaricom with our own credentials (the STK query).
+	# Only Safaricom can answer that query for our shortcode, so a forged callback cannot
+	# get a "0" out of it. The status poll uses the same query, which is why a payment the
+	# poll completed needs no second check.
+
+	def confirm_callback(self, transaction, result, data):
+		stk = ((data or {}).get("Body") or {}).get("stkCallback") or {}
+		checkout_id = stk.get("CheckoutRequestID") or transaction.get("gateway_reference")
+		if not checkout_id:
+			return UNAVAILABLE
+
+		probe = frappe._dict(name=transaction.name, gateway_reference=checkout_id)
+		try:
+			answer = self.check_status(probe, timeout=CONFIRM_TIMEOUT_SECONDS)
+		except Exception as e:
+			frappe.logger().error(f"onerc_payments: could not confirm callback for {transaction.name}: {e}")
+			return UNAVAILABLE
+
+		if answer.get("status") == "Completed":
+			return CONFIRMED
+		if answer.get("status") == "Failed":
+			return CONTRADICTED
+		# Still processing, unreachable or an unknown code: ask again later.
+		return UNAVAILABLE
+
+	def match_unconfirmed(self, data, gateway_names):
+		"""Match a paid callback to a push whose reply never reached us.
+
+		The callback carries the payer's phone and the amount; the push we sent carried
+		the same. One payment from the same phone, for the same amount, started in the
+		last few minutes and still without a CheckoutRequestID, is the one. Two or more,
+		or a masked phone number, and we do not guess: the callback is left unmatched
+		for a person to look at.
+		"""
+		stk = ((data or {}).get("Body") or {}).get("stkCallback") or {}
+		if _as_int(stk.get("ResultCode")) != 0 or not gateway_names:
+			return None
+
+		meta = self._metadata(stk)
+		phone = str(meta.get("PhoneNumber") or "").strip()
+		paid = meta.get("Amount")
+		if not phone.isdigit() or paid is None:
+			return None
+
+		now = now_datetime()
+		candidates = frappe.get_all(
+			"OneRC Payment Transaction",
+			filters={
+				"initiation_unconfirmed": 1,
+				"gateway": ["in", gateway_names],
+				"direction": "Inbound",
+				"phone_number": phone,
+				"gateway_reference": ["is", "not set"],
+				"status": ["in", ["Failed", "Pending", "Initiated"]],
+				"creation": [">=", add_to_date(now, minutes=-UNCONFIRMED_MATCH_MINUTES)],
+			},
+			fields=["name", "amount"],
+		)
+		fits = [c.name for c in candidates if charged_amount(c.amount) == flt(paid)]
+		return fits[0] if len(fits) == 1 else None
 
 	def generate_receipt(self, transaction):
 		return (
@@ -649,16 +856,19 @@ class MpesaDarajaGateway(BaseGateway):
 		name, credential = self._initiator()
 		if not (name and credential):
 			frappe.throw(
-				"M-Pesa lookups need the Initiator Name and Security Credential in "
-				"OneRC Payment Settings."
+				"M-Pesa lookups need the Initiator Name and Security Credential in OneRC Payment Settings."
 			)
 
-		detail = frappe.db.get_value(
-			"Mpesa Payment",
-			{"checkout_request_id": transaction.gateway_reference},
-			["name", "merchant_request_id"],
-			as_dict=True,
-		) if transaction.gateway_reference else None
+		detail = (
+			frappe.db.get_value(
+				"Mpesa Payment",
+				{"checkout_request_id": transaction.gateway_reference},
+				["name", "merchant_request_id"],
+				as_dict=True,
+			)
+			if transaction.gateway_reference
+			else None
+		)
 		if not detail or not detail.merchant_request_id:
 			frappe.throw(
 				f"{transaction.name} has no M-Pesa request ID to look up, so Safaricom "
@@ -680,12 +890,7 @@ class MpesaDarajaGateway(BaseGateway):
 		}
 
 		try:
-			response = requests.post(
-				f"{self._base_url()}/mpesa/transactionstatus/v1/query",
-				json=payload,
-				headers={"Authorization": f"Bearer {self._get_token()}"},
-				timeout=30,
-			)
+			response = self._post("/mpesa/transactionstatus/v1/query", payload)
 			data = response.json()
 		except Exception as e:
 			frappe.logger().error(f"Daraja transaction status request failed for {transaction.name}: {e}")
@@ -752,9 +957,7 @@ class MpesaDarajaGateway(BaseGateway):
 			"Amount": int(transaction.amount),
 			"PartyA": self.settings.mpesa_shortcode,
 			"PartyB": transaction.recipient_phone,
-			"Remarks": (
-				f"{transaction.source_app} — {transaction.source_document}"
-			),
+			"Remarks": (f"{transaction.source_app} — {transaction.source_document}"),
 			"QueueTimeOutURL": self._callback_url(transaction),
 			"ResultURL": self._callback_url(transaction),
 			"Occasion": transaction.name,

@@ -106,10 +106,20 @@ class TestReceiptRecovery(FrappeTestCase):
 	def _restore(self):
 		frappe.set_user("Administrator")
 		for name in self.created:
-			for detail in frappe.get_all("Mpesa Payment", filters={"payment_transaction": name}, pluck="name"):
+			for detail in frappe.get_all(
+				"Mpesa Payment", filters={"payment_transaction": name}, pluck="name"
+			):
 				frappe.delete_doc("Mpesa Payment", detail, force=True, ignore_permissions=True)
-			frappe.db.delete("Comment", {"reference_doctype": "OneRC Payment Transaction", "reference_name": name})
+			frappe.db.delete(
+				"Comment", {"reference_doctype": "OneRC Payment Transaction", "reference_name": name}
+			)
+			frappe.db.delete("OneRC Payment Callback", {"payment_transaction": name})
 			frappe.delete_doc("OneRC Payment Transaction", name, force=True, ignore_permissions=True)
+		# Every result is now kept as it arrived, matched or not - the unmatched ones too.
+		frappe.db.delete(
+			"OneRC Payment Callback",
+			{"gateway_reference": ["in", ["AG_RECOVERY_1", "AG_RECOVERY_2", "AG_SOMEBODY_ELSE", "AG_X"]]},
+		)
 		frappe.db.set_value("OneRC Payment Gateway", GATEWAY, "is_active", self._was_active)
 		frappe.db.set_single_value("OneRC Payment Settings", "environment", self._environment)
 		# The result endpoint commits, which the per-test rollback cannot undo.
@@ -122,7 +132,13 @@ class TestReceiptRecovery(FrappeTestCase):
 		return frappe.get_all(
 			"Mpesa Payment",
 			filters={"payment_transaction": name or self.txn.name},
-			fields=["name", "mpesa_receipt_number", "receipt_source", "transaction_date", "status_query_conversation_id"],
+			fields=[
+				"name",
+				"mpesa_receipt_number",
+				"receipt_source",
+				"transaction_date",
+				"status_query_conversation_id",
+			],
 		)[0]
 
 	# ── The code's shape ───────────────────────────────────────────
@@ -153,7 +169,11 @@ class TestReceiptRecovery(FrappeTestCase):
 		self.assertTrue(
 			frappe.db.exists(
 				"Comment",
-				{"reference_doctype": "OneRC Payment Transaction", "reference_name": self.txn.name, "comment_type": "Info"},
+				{
+					"reference_doctype": "OneRC Payment Transaction",
+					"reference_name": self.txn.name,
+					"comment_type": "Info",
+				},
 			)
 		)
 
@@ -203,7 +223,9 @@ class TestReceiptRecovery(FrappeTestCase):
 		with (
 			patch.object(MpesaDarajaGateway, "_initiator", return_value=("testapi", "CRED")),
 			patch.object(MpesaDarajaGateway, "_get_token", return_value="tok"),
-			patch("onerc_payments.gateways.mpesa_daraja.requests.post", return_value=_FakeResponse(response)) as post,
+			patch(
+				"onerc_payments.gateways.mpesa_daraja.requests.post", return_value=_FakeResponse(response)
+			) as post,
 		):
 			gateway.request_receipt(self.txn)
 
@@ -224,7 +246,9 @@ class TestReceiptRecovery(FrappeTestCase):
 			patch.object(MpesaDarajaGateway, "_get_token", return_value="tok"),
 			patch(
 				"onerc_payments.gateways.mpesa_daraja.requests.post",
-				return_value=_FakeResponse({"errorCode": "401.002.01", "errorMessage": "Invalid Access Token"}),
+				return_value=_FakeResponse(
+					{"errorCode": "401.002.01", "errorMessage": "Invalid Access Token"}
+				),
 			),
 			self.assertRaises(frappe.ValidationError),
 		):

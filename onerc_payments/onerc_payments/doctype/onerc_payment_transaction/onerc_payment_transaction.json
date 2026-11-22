@@ -27,12 +27,21 @@
   "recipient_account",
   "section_break_ghzr",
   "gateway_reference",
+  "account_reference",
   "gateway_receipt",
   "transaction_date",
   "column_break_auzk",
   "gateway_detail_doctype",
   "gateway_detail",
   "failure_reason",
+  "initiation_unconfirmed",
+  "review_section",
+  "needs_review",
+  "review_reason",
+  "column_break_review",
+  "reviewed_by",
+  "reviewed_on",
+  "review_note",
   "erpnext_section",
   "erpnext_payment_entry",
   "metadata_section",
@@ -45,6 +54,7 @@
    "in_list_view": 1,
    "label": "Gateway",
    "options": "OneRC Payment Gateway",
+   "read_only": 1,
    "reqd": 1
   },
   {
@@ -53,6 +63,7 @@
    "in_list_view": 1,
    "label": "Direction",
    "options": "\nInbound\nOutbound",
+   "read_only": 1,
    "reqd": 1
   },
   {
@@ -65,6 +76,7 @@
    "in_list_view": 1,
    "label": "Status",
    "options": "\nInitiated\nPending\nCompleted\nFailed\nCancelled\nRefunded",
+   "read_only": 1,
    "reqd": 1
   },
   {
@@ -72,12 +84,14 @@
    "fieldtype": "Currency",
    "in_list_view": 1,
    "label": "Amount",
+   "read_only": 1,
    "reqd": 1
   },
   {
    "fieldname": "currency",
    "fieldtype": "Data",
    "label": "Currency",
+   "read_only": 1,
    "reqd": 1
   },
   {
@@ -89,6 +103,7 @@
    "fieldname": "source_app",
    "fieldtype": "Data",
    "label": "Source App",
+   "read_only": 1,
    "reqd": 1
   },
   {
@@ -99,12 +114,14 @@
    "fieldname": "source_doctype",
    "fieldtype": "Data",
    "label": "Source Doctype",
+   "read_only": 1,
    "reqd": 1
   },
   {
    "fieldname": "source_document",
    "fieldtype": "Data",
    "label": "Source Document",
+   "read_only": 1,
    "reqd": 1
   },
   {
@@ -157,18 +174,21 @@
    "description": "Gateway confirmation / receipt code, e.g. the M-Pesa receipt number.",
    "fieldname": "gateway_receipt",
    "fieldtype": "Data",
-   "label": "Gateway Receipt"
+   "label": "Gateway Receipt",
+   "read_only": 1
   },
   {
    "fieldname": "transaction_date",
    "fieldtype": "Datetime",
-   "label": "Transaction Date"
+   "label": "Transaction Date",
+   "read_only": 1
   },
   {
    "description": "Gateway request reference, e.g. M-Pesa CheckoutRequestID (STK) or ConversationID (B2C). The callback matches back to this transaction by it.",
    "fieldname": "gateway_reference",
    "fieldtype": "Data",
-   "label": "Gateway Reference"
+   "label": "Gateway Reference",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_auzk",
@@ -193,7 +213,8 @@
   {
    "fieldname": "failure_reason",
    "fieldtype": "Small Text",
-   "label": "Failure Reason"
+   "label": "Failure Reason",
+   "read_only": 1
   },
   {
    "fieldname": "erpnext_section",
@@ -216,12 +237,73 @@
    "fieldtype": "Code",
    "label": "Metadata",
    "options": "JSON"
+  },
+  {
+   "description": "What the payer saw as the account number on the prompt, their SMS and the statement.",
+   "fieldname": "account_reference",
+   "fieldtype": "Data",
+   "label": "Account Reference",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "default": "0",
+   "description": "The gateway did not answer the request in time, so the prompt may still have reached the payer. A payment that arrives for it is matched by phone and amount.",
+   "fieldname": "initiation_unconfirmed",
+   "fieldtype": "Check",
+   "label": "No Reply When the Prompt Was Sent",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "collapsible_depends_on": "eval:doc.needs_review",
+   "fieldname": "review_section",
+   "fieldtype": "Section Break",
+   "label": "Review"
+  },
+  {
+   "default": "0",
+   "fieldname": "needs_review",
+   "fieldtype": "Check",
+   "in_standard_filter": 1,
+   "label": "Needs Review",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "review_reason",
+   "fieldtype": "Small Text",
+   "label": "Why",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_review",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "reviewed_by",
+   "fieldtype": "Link",
+   "label": "Reviewed By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reviewed_on",
+   "fieldtype": "Datetime",
+   "label": "Reviewed On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "review_note",
+   "fieldtype": "Small Text",
+   "label": "Review Note",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-25 12:00:00.000000",
+ "modified": "2026-11-17 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Onerc Payments",
  "name": "OneRC Payment Transaction",

@@ -26,6 +26,10 @@
 
 frappe.ui.form.on("OneRC Payment Transaction", {
 	refresh(frm) {
+		if (!frm.is_new() && frm.doc.needs_review) {
+			offer_review_actions(frm);
+		}
+
 		if (!frm.is_new() && frm.doc.status === "Completed" && !frm.doc.gateway_receipt) {
 			offer_receipt_recovery(frm, frm.doc.name);
 		}
@@ -210,5 +214,148 @@ function enter_receipt(frm, transaction_name) {
 		},
 	});
 
+	dialog.show();
+}
+
+/**
+ * A payment on the review list: say why, and offer what a person can do about it.
+ *
+ * The status, amount and receipt are read-only on this form, so these are the
+ * ways to settle a payment by hand. "Confirm as paid" runs the same path as an
+ * automatic confirmation, so the app the payment belongs to is told; editing the
+ * status field used to skip that. The server checks permission and refuses a
+ * receipt already used, or a record already paid by another payment.
+ */
+function offer_review_actions(frm) {
+	const reasons = (frm.doc.review_reason || "").trim().split("\n");
+	frm.set_intro(
+		__("Needs review: {0}", [frappe.utils.escape_html(reasons[reasons.length - 1] || "")]),
+		"red",
+	);
+
+	frappe
+		.call({
+			method: "onerc_payments.api.v1.payment.review_options",
+			args: { transaction_name: frm.doc.name },
+		})
+		.then((r) => {
+			const options = r?.message || {};
+			const group = __("Review");
+
+			if (options.can_confirm_paid) {
+				frm.add_custom_button(__("Confirm as paid"), () => confirm_paid(frm), group);
+			}
+			if (options.can_mark_refunded) {
+				frm.add_custom_button(__("Mark as refunded"), () => mark_refunded(frm), group);
+			}
+			if (options.can_close) {
+				frm.add_custom_button(__("Close review"), () => close_review([frm.doc.name], () => frm.reload_doc()), group);
+			}
+		});
+}
+
+function mark_refunded(frm) {
+	const dialog = new frappe.ui.Dialog({
+		title: __("Mark as refunded"),
+		fields: [
+			{
+				fieldtype: "HTML",
+				options: `<p class="text-muted small">${__(
+					"Records that this payment was paid back. No money is sent from here, and the app this payment belongs to is not told.",
+				)}</p>`,
+			},
+			{
+				fieldname: "note",
+				fieldtype: "Small Text",
+				label: __("How it was refunded"),
+				reqd: 1,
+				description: __("For example: M-Pesa reversal SLK4H8N2Q6 on 18 Nov."),
+			},
+		],
+		primary_action_label: __("Mark as refunded"),
+		primary_action(values) {
+			frappe
+				.call({
+					method: "onerc_payments.api.v1.payment.mark_refunded",
+					args: { transaction_name: frm.doc.name, note: values.note },
+					freeze: true,
+				})
+				.then(() => {
+					dialog.hide();
+					frappe.show_alert({ message: __("Marked as refunded."), indicator: "green" }, 5);
+					frm.reload_doc();
+				});
+		},
+	});
+	dialog.show();
+}
+
+function confirm_paid(frm) {
+	const dialog = new frappe.ui.Dialog({
+		title: __("Confirm as paid"),
+		fields: [
+			{
+				fieldtype: "HTML",
+				options: `<p class="text-muted small">${__(
+					"Only confirm a payment you have found on the statement. The app this payment belongs to is told it was paid, exactly as if the gateway had confirmed it.",
+				)}</p>`,
+			},
+			{ fieldname: "receipt", fieldtype: "Data", label: __("Receipt number"), reqd: 1 },
+			{
+				fieldname: "note",
+				fieldtype: "Small Text",
+				label: __("How you checked it"),
+				reqd: 1,
+				description: __("For example: found on the M-Pesa statement of 12 Nov, line for 254712…"),
+			},
+		],
+		primary_action_label: __("Confirm as paid"),
+		primary_action(values) {
+			frappe
+				.call({
+					method: "onerc_payments.api.v1.payment.confirm_paid_after_review",
+					args: { transaction_name: frm.doc.name, receipt: values.receipt, note: values.note },
+					freeze: true,
+				})
+				.then(() => {
+					dialog.hide();
+					frappe.show_alert({ message: __("Payment confirmed."), indicator: "green" }, 5);
+					frm.reload_doc();
+				});
+		},
+	});
+	dialog.show();
+}
+
+function close_review(names, after) {
+	const dialog = new frappe.ui.Dialog({
+		title: __("Close review"),
+		fields: [
+			{
+				fieldname: "note",
+				fieldtype: "Small Text",
+				label: __("What was checked or done"),
+				reqd: 1,
+				description: __("Kept on the payment, so the next person knows."),
+			},
+		],
+		primary_action_label: __("Close review"),
+		primary_action(values) {
+			frappe
+				.call({
+					method: "onerc_payments.api.v1.payment.close_review",
+					args: { transaction_names: JSON.stringify(names), note: values.note },
+					freeze: true,
+				})
+				.then((r) => {
+					dialog.hide();
+					frappe.show_alert(
+						{ message: __("{0} review(s) closed.", [r?.message?.closed || 0]), indicator: "green" },
+						5,
+					);
+					after && after();
+				});
+		},
+	});
 	dialog.show();
 }
